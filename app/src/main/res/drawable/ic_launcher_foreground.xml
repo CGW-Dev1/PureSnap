@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 外层圆角取景框 -->
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M34,26 C29.58,26 26,29.58 26,34 L26,44 L31,44 L31,34 C31,32.34 32.34,31 34,31 L44,31 L44,26 L34,26 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M74,26 L64,26 L64,31 L74,31 C75.66,31 77,32.34 77,34 L77,44 L82,44 L82,34 C82,29.58 78.42,26 74,26 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M31,74 L31,64 L26,64 L26,74 C26,78.42 29.58,82 34,82 L44,82 L44,77 L34,77 C32.34,77 31,75.66 31,74 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M77,74 C77,75.66 75.66,77 74,77 L64,77 L64,82 L74,82 C78.42,82 82,78.42 82,74 L82,64 L77,64 L77,74 Z" />
+    <!-- 中心无损下载箭头与星芒 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M51,36 L57,36 L57,54 L65,46 L69,50 L54,65 L39,50 L43,46 L51,54 Z" />
+    <path
+        android:fillColor="#5EEAD4"
+        android:pathData="M38,69 L70,69 L70,73 L38,73 Z" />
+</vector>
