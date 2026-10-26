@@ -19,49 +19,49 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// 净存 PureSnap 现代清爽主题色系（翡翠青 + 极光蓝 + 纯净石板灰）
+// PureSnap 高级宝石蓝与冰川蓝视觉色系（Sapphire Blue & Glacier Azure）
 private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF0D9488),
+    primary = Color(0xFF2563EB),            // 皇家宝石蓝
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFCCFBF1),
-    onPrimaryContainer = Color(0xFF042F2E),
-    secondary = Color(0xFF0284C7),
+    primaryContainer = Color(0xFFDBEAFE),   // 柔和冰晶蓝容器
+    onPrimaryContainer = Color(0xFF1E3A8A), // 深邃海军蓝文字
+    secondary = Color(0xFF0284C7),          // 天际蔚蓝
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFE0F2FE),
-    onSecondaryContainer = Color(0xFF082F49),
-    tertiary = Color(0xFFE11D48),
+    secondaryContainer = Color(0xFFE0F2FE), // 浅云蓝容器
+    onSecondaryContainer = Color(0xFF0C4A6E),
+    tertiary = Color(0xFF4F46E5),           // 靛青蓝点缀
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFFFE4E6),
-    onTertiaryContainer = Color(0xFF4C0519),
-    background = Color(0xFFF8FAFC),
+    tertiaryContainer = Color(0xFFE0E7FF),
+    onTertiaryContainer = Color(0xFF312E81),
+    background = Color(0xFFF2F6FC),         // 微冷冰蓝灰底色，衬托纯白卡片立体层次
     onBackground = Color(0xFF0F172A),
-    surface = Color(0xFFFFFFFF),
+    surface = Color(0xFFFFFFFF),            // 纯白高光卡片表面
     onSurface = Color(0xFF0F172A),
-    surfaceVariant = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFFE8EFFA),     // 浅蓝灰内嵌槽位底色
     onSurfaceVariant = Color(0xFF475569),
-    outline = Color(0xFFCBD5E1)
+    outline = Color(0xFFBFDBFE)             // 柔和蓝调微描边
 )
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF2DD4BF),
-    onPrimary = Color(0xFF042F2E),
-    primaryContainer = Color(0xFF115E59),
-    onPrimaryContainer = Color(0xFFCCFBF1),
-    secondary = Color(0xFF38BDF8),
+    primary = Color(0xFF3B82F6),            // 亮钻钴蓝
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFF1E3A8A),   // 深海蓝容器
+    onPrimaryContainer = Color(0xFFDBEAFE),
+    secondary = Color(0xFF38BDF8),          // 极光天蓝
     onSecondary = Color(0xFF082F49),
-    secondaryContainer = Color(0xFF0369A1),
+    secondaryContainer = Color(0xFF075985),
     onSecondaryContainer = Color(0xFFE0F2FE),
-    tertiary = Color(0xFFFB7185),
-    onTertiary = Color(0xFF4C0519),
-    tertiaryContainer = Color(0xFF9F1239),
-    onTertiaryContainer = Color(0xFFFFE4E6),
-    background = Color(0xFF090D16),
+    tertiary = Color(0xFF818CF8),
+    onTertiary = Color(0xFF1E1B4B),
+    tertiaryContainer = Color(0xFF312E81),
+    onTertiaryContainer = Color(0xFFE0E7FF),
+    background = Color(0xFF080D1A),         // 深邃午夜蓝黑底色
     onBackground = Color(0xFFF8FAFC),
-    surface = Color(0xFF111827),
-    onSurface = Color(0xFFF8FAFC),
-    surfaceVariant = Color(0xFF1E293B),
+    surface = Color(0xFF10192D),            // 午夜蓝卡片表面
+    onSurface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFF192642),     // 高阶深蓝次级表面
     onSurfaceVariant = Color(0xFF94A3B8),
-    outline = Color(0xFF334155)
+    outline = Color(0xFF2B3D5E)
 )
 
 // 大圆角卡片规范（24dp 核心卡片 + 胶囊按钮）
@@ -78,18 +78,20 @@ val PureSnapTypography = Typography(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
-        lineHeight = 28.sp
+        lineHeight = 28.sp,
+        letterSpacing = (-0.3).sp
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 19.sp,
-        lineHeight = 25.sp
+        lineHeight = 25.sp,
+        letterSpacing = (-0.2).sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
+        fontSize = 15.5.sp,
         lineHeight = 22.sp
     ),
     bodyLarge = TextStyle(
@@ -102,7 +104,7 @@ val PureSnapTypography = Typography(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 13.5.sp,
-        lineHeight = 19.sp
+        lineHeight = 19.5.sp
     ),
     labelLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -115,7 +117,7 @@ val PureSnapTypography = Typography(
 @Composable
 fun PureSnapTheme(
     darkThemeMode: Int = 0, // 0: 跟随系统, 1: 浅色, 2: 深色
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val useDarkTheme = when (darkThemeMode) {

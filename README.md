@@ -1,13 +1,13 @@
-# 净存 (PureSnap) —— 多平台无水印原图/视频提取工具
+# PureSnap —— 多平台无水印原图/实况图/视频提取工具
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Platform-Android%2010%2B%20(API%2029%2B)-3DDC84?logo=android&logoColor=white" alt="Android 10+" />
-  <img src="https://img.shields.io/badge/UI-Jetpack%20Compose%20%2B%20Material%203-4285F4?logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
-  <img src="https://img.shields.io/badge/Language-Kotlin%202.0-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin 2.0" />
-  <img src="https://img.shields.io/badge/Release-v1.0.0-FF2442" alt="Release v1.0.0" />
+  <img src="https://img.shields.io/badge/Platform-Android%2010%2B%20(API%2029%2B)-2563EB?logo=android&logoColor=white" alt="Android 10+" />
+  <img src="https://img.shields.io/badge/UI-Jetpack%20Compose%20%2B%20Material%203-0284C7?logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
+  <img src="https://img.shields.io/badge/Language-Kotlin%202.0-4F46E5?logo=kotlin&logoColor=white" alt="Kotlin 2.0" />
+  <img src="https://img.shields.io/badge/Release-v1.1.0-2563EB" alt="Release v1.1.0" />
 </p>
 
-**净存 (PureSnap)** 是一款遵循 **Material Design 3 (Material You)** 规范、基于 **Jetpack Compose** 构建的 Android 原生系统级无感原画提取工具。专注于解决社交平台去水印工具常见的「画质二次压缩、广告弹窗泛滥、跨应用频繁切换」三大痛点，提供**极短操作路径、真原画质无损提取、多图集高效批量管理与零广告清爽交互**。
+**PureSnap** 是一款基于 **Material Design 3** 与 **Jetpack Compose** 构建的 Android 原生系统级无感原画提取工具，采用**皇家宝石蓝与冰川蓝（Sapphire & Glacier Blue）**现代卡片设计体系。专注于解决社交平台去水印工具常见的「画质二次压缩、广告弹窗泛滥、跨应用频繁切换」三大痛点，提供**极短操作路径、真原画质无损提取、多图集高效批量管理与零广告清爽交互**。
 
 ---
 
@@ -16,10 +16,10 @@
 - **🎯 真·原图直出（无损画质）**
   直接解析目标平台 CDN 原始媒体流直链，剥离小红书/抖音/最右等平台的缩放与水印后缀（如 `?imageView2/...`），保留原始分辨率、色彩空间（Display P3 / sRGB）以及**小红书实况图（Live Photo）**动态视频流。
 - **⚡ 原生级无感交互（半屏即用即走）**
-  - **系统分享面板直达（Share Sheet Overlay）**：注册系统 `ACTION_SEND`，在小红书/抖音点击「分享 → 更多 → 净存·无损提取」时，直接在当前界面底部拉起透明半屏解析抽屉，一键保存后自动下滑关闭，无缝返回原应用。
+  - **系统分享面板直达（Share Sheet Overlay）**：注册系统 `ACTION_SEND`，在小红书/抖音点击「分享 → 更多 → PureSnap · 无损提取」时，直接在当前界面底部拉起透明半屏解析抽屉，一键保存后自动下滑关闭，无缝返回原应用。
   - **剪贴板灵动感知（Smart Paste Banner）**：切回前台时自动识别剪贴板中的分享口令，顶部滑出带微震动反馈的灵动胶囊提示条，支持一键触发解析。
-- **🎨 高颜值现代卡片 UI（Material You）**
-  采用大圆角卡片（24dp）、双栏悬浮毛玻璃胶囊导航栏、流光骨架屏（Shimmer Skeleton）与平滑变形下载进度按钮（Morphing Button），支持浅色/深色模式自动切换及 Android 12+ 动态壁纸取色（Dynamic Color）。
+- **🎨 宝石蓝现代卡片 UI（Sapphire Blue Design）**
+  采用皇家宝石蓝与冰川蓝三层立体卡片（24dp 圆角外卡 + 冰蓝凹槽输入区 + 宝石蓝渐变胶囊按钮）、等宽对称悬浮双栏胶囊导航栏、流光骨架屏（Shimmer Skeleton）与平滑变形下载进度按钮（Morphing Button）。
 
 ---
 
@@ -55,9 +55,9 @@ PureSnap/
 │       ├── ui/
 │       │   ├── components/   # 九宫格预览、变形下载按钮、流光骨架屏、剪贴板灵动胶囊
 │       │   ├── screens/      # 工作台 (Workbench)、瀑布流媒体库 (Gallery)、历史库与设置抽屉
-│       │   └── theme/        # Material Design 3 配色与排版规范
+│       │   └── theme/        # PureSnap 皇家宝石蓝与冰川蓝配色与排版规范
 │       ├── util/             # 短链口令清洗、CDN 图像渲染、MediaStore 并发归档与 MD5 微调
-│       ├── MainActivity.kt   # 主工作台与悬浮双栏胶囊导航容器
+│       ├── MainActivity.kt   # 主工作台与悬浮双栏等宽胶囊导航容器
 │       └── ShareOverlayActivity.kt # 系统分享面板半屏透明抽屉 Activity
 └── cloud-rule-worker/        # 配套云端动态规则与短链重定向解析服务 (Python FastAPI)
 ```
@@ -68,7 +68,7 @@ PureSnap/
 
 请前往右侧 **[Releases](../../releases)** 页面下载最新构建的 Android 安装包：
 
-- **Release 安装包**：`PureSnap-v1.0.0.apk`（支持 Android 10 / API 29 及以上设备）
+- **最新安装包 (`v1.1.0`)**：`PureSnap-v1.1.0.apk`（支持 Android 10 / API 29 及以上设备）
 
 ### 本地编译构建
 

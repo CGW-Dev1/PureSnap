@@ -82,7 +82,7 @@ fun ComplianceDisclaimerDialog(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "净存 (PureSnap) · 首次启动必读",
+                            text = "PureSnap · 首次启动必读",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -154,7 +154,7 @@ fun ComplianceDisclaimerDialog(
                         modifier = Modifier.weight(0.62f)
                     ) {
                         Text(
-                            text = "同意并进入净存",
+                            text = "同意并进入 PureSnap",
                             fontWeight = FontWeight.Bold
                         )
                     }

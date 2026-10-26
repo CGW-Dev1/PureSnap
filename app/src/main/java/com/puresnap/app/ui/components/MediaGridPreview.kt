@@ -329,9 +329,9 @@ private fun MediaGridCell(
         // 左上角：画质/实况角标 ([4K], [LIVE], [原图], [1080P])
         val badgeBgColor = when (item.badge) {
             QualityBadge.LIVE -> Color(0xFFE11D48)
-            QualityBadge.FOUR_K -> Color(0xFFD97706)
+            QualityBadge.FOUR_K -> Color(0xFF4F46E5)
             QualityBadge.VIDEO_HD -> Color(0xFF0284C7)
-            else -> Color(0xFF0D9488)
+            else -> Color(0xFF2563EB)
         }
 
         Surface(

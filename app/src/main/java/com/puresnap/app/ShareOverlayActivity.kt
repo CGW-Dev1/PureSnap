@@ -22,9 +22,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.FilterCenterFocus
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -60,7 +61,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 系统分享半屏抽屉（Share Sheet Overlay — P0 & 第三章 3.2 核心体验）
- * 当用户在小红书/抖音点击“分享 → 更多”选择「净存·无损提取」时：
+ * 当用户在小红书/抖音点击“分享 → 更多”选择「PureSnap · 无损提取」时：
  * - 不启动完整主页面，而是以透明 Activity 承载底部 ModalBottomSheet 半屏弹窗
  * - 抽屉内直接显示流光骨架屏 -> 展现九宫格图集 -> 点击“一键保存” -> 弹出 Toast “已保存 X 张原图至相册” ->
  *   抽屉自动下滑关闭，用户无缝回到刚才刷视频/看笔记的界面。
@@ -121,21 +122,21 @@ class ShareOverlayActivity : ComponentActivity() {
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(RoundedCornerShape(9.dp))
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(10.dp))
                                         .background(MaterialTheme.colorScheme.primary)
                                 ) {
-                                    Text(
-                                        text = "净",
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 15.sp
+                                    Icon(
+                                        imageVector = Icons.Default.FilterCenterFocus,
+                                        contentDescription = "PureSnap",
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(9.dp))
                                 Column {
                                     Text(
-                                        text = "净存 · 半屏极速解析抽屉",
+                                        text = "PureSnap · 半屏极速解析",
                                         style = MaterialTheme.typography.titleMedium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -161,7 +162,7 @@ class ShareOverlayActivity : ComponentActivity() {
                                     }
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.OpenInNew,
+                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                                         contentDescription = "在主工作台打开",
                                         modifier = Modifier.size(18.dp)
                                     )

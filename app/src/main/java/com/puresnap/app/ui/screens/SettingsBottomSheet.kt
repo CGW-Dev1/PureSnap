@@ -103,7 +103,7 @@ fun SettingsBottomSheet(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "净存引擎与偏好设置",
+                        text = "PureSnap 引擎与偏好设置",
                         style = MaterialTheme.typography.titleLarge
                     )
                     Text(
@@ -224,7 +224,7 @@ fun SettingsBottomSheet(
             ) {
                 SwitchPreferenceRow(
                     title = "Android 12+ 动态壁纸取色（Dynamic Color）",
-                    subtitle = "根据系统桌面壁纸自动生成 Material You 主题调色板",
+                    subtitle = "默认使用 PureSnap 经典宝石蓝主题，开启后根据系统壁纸自动变色",
                     checked = preferences.dynamicColorEnabled,
                     onCheckedChange = { prefsRepo.setDynamicColorEnabled(it) }
                 )

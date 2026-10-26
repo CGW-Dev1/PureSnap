@@ -30,6 +30,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -41,8 +43,7 @@ import com.puresnap.app.ui.MorphDownloadState
 
 /**
  * 变形进度下载按钮（Morphing Progress Button）
- * 点击后按钮自身平滑变形为实时进度条："正在保存原图 (3/6)..."，
- * 完成后变为翡翠绿对勾并伴随清脆的触觉震动。
+ * 默认态采用宝石蓝到天际蓝的流光渐变胶囊，点击后平滑变形为实时进度条，完成后变为翠绿确认态。
  */
 @Composable
 fun MorphingDownloadButton(
@@ -63,7 +64,7 @@ fun MorphingDownloadButton(
         targetValue = when (downloadState) {
             is MorphDownloadState.Idle -> MaterialTheme.colorScheme.primary
             is MorphDownloadState.Downloading -> MaterialTheme.colorScheme.primaryContainer
-            is MorphDownloadState.Completed -> Color(0xFF10B981) // 翡翠绿完成态
+            is MorphDownloadState.Completed -> Color(0xFF059669)
         },
         animationSpec = tween(280),
         label = "morph_bg_color"
@@ -87,8 +88,26 @@ fun MorphingDownloadButton(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .height(46.dp)
+            .shadow(
+                elevation = if (downloadState is MorphDownloadState.Idle) 4.dp else 1.dp,
+                shape = CircleShape,
+                spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)
+            )
             .clip(CircleShape)
-            .background(targetBgColor)
+            .then(
+                if (downloadState is MorphDownloadState.Idle) {
+                    Modifier.background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.secondary
+                            )
+                        )
+                    )
+                } else {
+                    Modifier.background(targetBgColor)
+                }
+            )
             .clickable(enabled = downloadState !is MorphDownloadState.Downloading && selectedCount > 0) {
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 onClick()
@@ -101,7 +120,14 @@ fun MorphingDownloadButton(
                     .fillMaxHeight()
                     .fillMaxWidth(progressFraction)
                     .align(Alignment.CenterStart)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.85f))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.secondary
+                            )
+                        )
+                    )
             )
         }
 
@@ -117,16 +143,17 @@ fun MorphingDownloadButton(
                     Icon(
                         imageVector = Icons.Default.Download,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary,
+                        tint = Color.White,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "保存选中原图 ($selectedCount)",
-                        color = MaterialTheme.colorScheme.onPrimary,
+                        color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.5.sp,
                         maxLines = 1,
+                        softWrap = false,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -144,6 +171,7 @@ fun MorphingDownloadButton(
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
                         maxLines = 1,
+                        softWrap = false,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -162,6 +190,7 @@ fun MorphingDownloadButton(
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.5.sp,
                         maxLines = 1,
+                        softWrap = false,
                         overflow = TextOverflow.Ellipsis
                     )
                 }

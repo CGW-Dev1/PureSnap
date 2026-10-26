@@ -16,7 +16,7 @@ data class UserPreferencesState(
     val livePhotoExportMode: LivePhotoExportMode = LivePhotoExportMode.BOTH_IMAGE_AND_MP4,
     val modifyMd5Enabled: Boolean = false,
     val duplicateReminderEnabled: Boolean = true,
-    val dynamicColorEnabled: Boolean = true,
+    val dynamicColorEnabled: Boolean = false,
     val darkThemeMode: Int = 0, // 0: 跟随系统, 1: 浅色, 2: 深色
     val cloudApiEndpoint: String = "",
     val xhsCookie: String = "",
@@ -58,7 +58,7 @@ class AppPreferencesRepository(context: Context) {
                 .getOrDefault(LivePhotoExportMode.BOTH_IMAGE_AND_MP4),
             modifyMd5Enabled = prefs.getBoolean("modify_md5_enabled", false),
             duplicateReminderEnabled = prefs.getBoolean("duplicate_reminder_enabled", true),
-            dynamicColorEnabled = prefs.getBoolean("dynamic_color_enabled", true),
+            dynamicColorEnabled = prefs.getBoolean("dynamic_color_v2", false),
             darkThemeMode = prefs.getInt("dark_theme_mode", 0),
             cloudApiEndpoint = prefs.getString("cloud_api_endpoint", "") ?: "",
             xhsCookie = prefs.getString("xhs_cookie", "") ?: "",
@@ -101,7 +101,7 @@ class AppPreferencesRepository(context: Context) {
     }
 
     fun setDynamicColorEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("dynamic_color_enabled", enabled).apply()
+        prefs.edit().putBoolean("dynamic_color_v2", enabled).apply()
         _state.value = _state.value.copy(dynamicColorEnabled = enabled)
     }
 

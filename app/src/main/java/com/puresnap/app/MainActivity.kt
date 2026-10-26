@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -117,10 +119,10 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
-                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                Brush.verticalGradient(
                                     colors = listOf(
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.055f),
-                                        MaterialTheme.colorScheme.background,
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.09f),
+                                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.03f),
                                         MaterialTheme.colorScheme.background
                                     )
                                 )
@@ -172,7 +174,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // 底部毛玻璃悬浮双栏胶囊导航栏：(  [ 工作台 ]    [ 媒体库 ]  )
+                        // 底部毛玻璃悬浮双栏等宽胶囊导航栏：(  [ 工作台 ]    [ 媒体库 ]  )
                         FloatingCapsuleBottomBar(
                             selectedTab = selectedTab,
                             galleryCount = downloadedMedia.size,
@@ -184,7 +186,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 首次启动免责协议弹窗（第六章合规机制）
+                    // 首次启动免责协议弹窗
                     if (!preferences.disclaimerAccepted) {
                         ComplianceDisclaimerDialog(
                             onAccept = { viewModel.prefsRepo.acceptDisclaimer() },
@@ -250,8 +252,8 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * 极简双栏胶囊悬浮底部栏（Floating Bottom Bar）
- * (       [ 工作台 ]    [ 媒体库 ]       )
+ * 极简双栏等宽胶囊悬浮底部栏（Floating Bottom Bar）
+ * 左右两个 Tab 严格采用相同宽高 (130.dp × 40.dp)，实现完美对称的高级悬浮质感
  */
 @Composable
 private fun FloatingCapsuleBottomBar(
@@ -262,19 +264,23 @@ private fun FloatingCapsuleBottomBar(
 ) {
     Surface(
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
         tonalElevation = 6.dp,
         modifier = modifier
-            .shadow(elevation = 8.dp, shape = CircleShape)
+            .shadow(
+                elevation = 10.dp,
+                shape = CircleShape,
+                spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+            )
             .border(
-                width = 0.8.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
                 shape = CircleShape
             )
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp)
         ) {
             CapsuleNavTabItem(
@@ -303,12 +309,8 @@ private fun CapsuleNavTabItem(
     badgeCount: Int,
     onClick: () -> Unit
 ) {
-    val bgColor by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-        label = "tab_bg"
-    )
     val contentColor by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        targetValue = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
         label = "tab_content"
     )
 
@@ -316,10 +318,25 @@ private fun CapsuleNavTabItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
         modifier = Modifier
+            .width(130.dp)
+            .height(40.dp)
             .clip(CircleShape)
-            .background(bgColor)
+            .then(
+                if (selected) {
+                    Modifier.background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.secondary
+                            )
+                        )
+                    )
+                } else {
+                    Modifier.background(Color.Transparent)
+                }
+            )
             .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 9.dp)
+            .padding(horizontal = 12.dp)
     ) {
         Icon(
             imageVector = icon,
@@ -331,23 +348,23 @@ private fun CapsuleNavTabItem(
         Text(
             text = title,
             color = contentColor,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
             fontSize = 13.5.sp,
             maxLines = 1,
             softWrap = false
         )
         if (badgeCount > 0) {
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(5.dp))
             Badge(
                 containerColor = if (selected) {
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.22f)
+                    Color.White.copy(alpha = 0.24f)
                 } else {
                     MaterialTheme.colorScheme.primaryContainer
                 },
                 contentColor = if (selected) {
-                    MaterialTheme.colorScheme.onPrimary
+                    Color.White
                 } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
+                    MaterialTheme.colorScheme.primary
                 }
             ) {
                 Text(
