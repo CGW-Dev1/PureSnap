@@ -554,15 +554,22 @@ private fun ZoomableMediaPreviewDialog(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
-                            imageVector = if (item.isVideo) Icons.Default.Videocam else Icons.Default.ZoomIn,
+                            imageVector = when {
+                                item.isVideo -> Icons.Default.Videocam
+                                item.isLivePhoto -> Icons.Default.MotionPhotosOn
+                                else -> Icons.Default.ZoomIn
+                            },
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (item.isVideo) "无水印视频预览 · ${item.resolutionLabel}"
-                            else "双指缩放 (${String.format("%.1fx", scale)}) · ${item.resolutionLabel}",
+                            text = when {
+                                item.isVideo -> "无水印视频预览 · ${item.resolutionLabel}"
+                                item.isLivePhoto -> "LIVE 实况原画预览 · ${item.resolutionLabel}"
+                                else -> "双指缩放 (${String.format("%.1fx", scale)}) · ${item.resolutionLabel}"
+                            },
                             color = Color.White,
                             fontSize = 12.sp
                         )
@@ -726,13 +733,33 @@ private fun LivePhotoDualExportDialog(
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.Black)
                 ) {
-                    previewBmp?.let { bmp ->
-                        Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = "实况预览",
-                            contentScale = ContentScale.Crop,
+                    if (!item.liveVideoUrl.isNullOrBlank()) {
+                        AndroidView(
+                            factory = { ctx ->
+                                VideoView(ctx).apply {
+                                    val headers = mapOf(
+                                        "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                                        "Referer" to DynamicMediaRenderer.refererForPlatform(platform, item.liveVideoUrl)
+                                    )
+                                    setVideoURI(Uri.parse(item.liveVideoUrl), headers)
+                                    setOnPreparedListener { mp ->
+                                        mp.isLooping = true
+                                        mp.setVolume(0f, 0f)
+                                        start()
+                                    }
+                                }
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
+                    } else {
+                        previewBmp?.let { bmp ->
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = "实况预览",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
 

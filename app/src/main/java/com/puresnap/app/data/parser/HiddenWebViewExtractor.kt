@@ -94,7 +94,7 @@ object HiddenWebViewExtractor {
                 var scripts = document.querySelectorAll('script');
                 for (var i = 0; i < scripts.length; i++) {
                     var txt = scripts[i].textContent || '';
-                    if (txt.indexOf('_ROUTER_DATA') !== -1 || txt.indexOf('__INITIAL_STATE__') !== -1 || txt.indexOf('INIT_STATE') !== -1 || txt.indexOf('imageList') !== -1 || txt.indexOf('item_list') !== -1 || txt.indexOf('coverUrls') !== -1) {
+                    if (txt.indexOf('_ROUTER_DATA') !== -1 || txt.indexOf('__INITIAL_STATE__') !== -1 || txt.indexOf('INIT_STATE') !== -1 || txt.indexOf('imageList') !== -1 || txt.indexOf('imagesList') !== -1 || txt.indexOf('item_list') !== -1 || txt.indexOf('image_post_info') !== -1 || txt.indexOf('livePhoto') !== -1 || txt.indexOf('live_photo') !== -1 || txt.indexOf('coverUrls') !== -1) {
                         scriptDump += txt + '\n';
                     }
                 }
@@ -178,13 +178,16 @@ object HiddenWebViewExtractor {
                             val parsed = parseEvaluatedJson(rawJsonLiteral, sniffedUrls.toList())
                             val hasValidMediaState = parsed != null && (
                                 (parsed.routerDataJson?.contains("item_list") == true) ||
+                                    (parsed.routerDataJson?.contains("image_post_info") == true) ||
                                     (parsed.initialStateJson?.contains("imageList") == true) ||
+                                    (parsed.initialStateJson?.contains("imagesList") == true) ||
+                                    (parsed.initialStateJson?.contains("livePhoto") == true) ||
                                     (parsed.initialStateJson?.contains("photo") == true) ||
-                                    (parsed.stateScriptText.contains("item_list") || parsed.stateScriptText.contains("imageList") || parsed.stateScriptText.contains("photo") || parsed.stateScriptText.contains("coverUrls")) ||
+                                    (parsed.stateScriptText.contains("item_list") || parsed.stateScriptText.contains("image_post_info") || parsed.stateScriptText.contains("imageList") || parsed.stateScriptText.contains("imagesList") || parsed.stateScriptText.contains("livePhoto") || parsed.stateScriptText.contains("photo") || parsed.stateScriptText.contains("coverUrls")) ||
                                     parsed.ogImages.isNotEmpty() ||
                                     parsed.ogVideo.isNotBlank() ||
                                     parsed.domVideos.isNotEmpty() ||
-                                    sniffedUrls.any { it.contains("aweme/v1/play") || it.contains("douyinvod.com") || it.endsWith(".mp4") }
+                                    sniffedUrls.any { it.contains("aweme/v1/play") || it.contains("douyinvod.com") || it.contains("sns-video") || it.endsWith(".mp4") }
                                 )
 
                             if (hasValidMediaState || attempt >= 11) {

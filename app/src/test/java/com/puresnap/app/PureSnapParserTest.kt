@@ -136,4 +136,50 @@ class PureSnapParserTest {
         assertNotEquals(originalMd5, modifiedMd5)
         assertTrue(modifiedBytes.size > originalBytes.size)
     }
+
+    @Test
+    fun testXiaohongshuLivePhotoExtraction() {
+        val sampleHtml = """
+            <html><body><script>
+            window.__INITIAL_STATE__={"noteData":{"data":{"noteData":{"noteId":"672000112233","type":"normal","title":"迪士尼实况图","desc":"烟花实况好美","user":{"nickname":"迪士尼在逃公主","avatar":"https://sns-avatar.xhscdn.com/avatar2.jpg"},"imageList":[{"traceId":"1040g00831livetrace","width":3024,"height":4032,"livePhoto":true,"urlDefault":"http://sns-webpic-qc.xhscdn.com/202610251120/abcdef/1040g00831livetrace!nd_dft_wlteh_webp_3","stream":{"h265":[{"masterUrl":"https://sns-video-bd.xhscdn.com/stream/live_disney_h265.mp4"}]}}]}}}}
+            </script></body></html>
+        """.trimIndent()
+
+        val post = MultiPlatformParserEngine.parseFromWebViewHtml(
+            url = "https://www.xiaohongshu.com/discovery/item/672000112233",
+            html = sampleHtml,
+            preferences = UserPreferencesState()
+        )
+        assertNotNull(post)
+        assertEquals("小红书·实况图", post!!.postTypeLabel)
+        assertEquals(1, post.mediaItems.size)
+        val item = post.mediaItems[0]
+        assertTrue("Item should be Live Photo", item.isLivePhoto)
+        assertEquals("https://sns-video-bd.xhscdn.com/stream/live_disney_h265.mp4", item.liveVideoUrl)
+        assertEquals("https://ci.xiaohongshu.com/1040g00831livetrace?imageView2/2/w/0/format/png", item.originUrl)
+    }
+
+    @Test
+    fun testDouyinLivePhotoImagePostExtraction() {
+        val sampleHtml = """
+            <html><body><script>
+            window._ROUTER_DATA = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[{"aweme_id":"7430001122334455667","desc":"海边落日实况图文 #实况 #日落","author":{"nickname":"日落收藏家","unique_id":"sunset_live","avatar_larger":{"url_list":["https://p3.douyinpic.com/avatar3.jpeg"]}},"image_post_info":{"images":[{"display_image":{"url_list":["https://p3.douyinpic.com/sunset_display.jpeg"]},"live_photo":{"video":{"play_addr":{"url_list":["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v0200sunset_live&line=0"]}}}}]}}]}}}};
+            </script></body></html>
+        """.trimIndent()
+
+        val post = MultiPlatformParserEngine.parseFromWebViewHtml(
+            url = "https://www.iesdouyin.com/share/video/7430001122334455667/",
+            html = sampleHtml,
+            preferences = UserPreferencesState()
+        )
+        assertNotNull(post)
+        assertEquals("抖音·实况图", post!!.postTypeLabel)
+        assertEquals(1, post.mediaItems.size)
+        val item = post.mediaItems[0]
+        assertTrue("Item should be Live Photo", item.isLivePhoto)
+        assertNotNull(item.liveVideoUrl)
+        assertTrue(item.liveVideoUrl!!.contains("/play/"))
+        assertFalse(item.liveVideoUrl!!.contains("playwm"))
+        assertEquals("https://p3.douyinpic.com/sunset_display.jpeg", item.originUrl)
+    }
 }
