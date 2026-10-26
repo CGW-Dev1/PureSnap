@@ -158,10 +158,10 @@ fun SettingsBottomSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 2. 实况图 (Live Photo) 双模导出设置
+            // 2. 实况照片 (Live Photo) 导出设置
             SectionCard(
                 icon = Icons.Default.MotionPhotosOn,
-                title = "小红书实况图 (Live Photo) 默认导出方式"
+                title = "实况照片 (Live Photo) 默认导出方式"
             ) {
                 LivePhotoExportMode.entries.forEach { mode ->
                     Row(

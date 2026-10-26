@@ -209,4 +209,37 @@ class PureSnapParserTest {
             assertFalse(item.liveVideoUrl!!.contains("playwm"))
         }
     }
+
+    @Test
+    fun testMotionPhotoSynthesis() {
+        // 构造最小合法 JPEG 字节流：SOI + APP0 + SOS/ImageData + EOI
+        val mockJpeg = byteArrayOf(
+            0xFF.toByte(), 0xD8.toByte(), // SOI
+            0xFF.toByte(), 0xE0.toByte(), 0x00.toByte(), 0x10.toByte(), // APP0 len=16
+            0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // JFIF payload
+            0xFF.toByte(), 0xDA.toByte(), 0x00.toByte(), 0x08.toByte(), // SOS
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            0xFF.toByte(), 0xD9.toByte()  // EOI
+        )
+
+        val mockMp4Video = "ftypmp42mock_douyin_live_video_stream_payload_bytes_for_testing".toByteArray(Charsets.UTF_8)
+
+        val synthesized = com.puresnap.app.util.MotionPhotoSynthesizer.synthesizeMotionPhoto(mockJpeg, mockMp4Video)
+
+        // 1. 验证 Motion Photo 标识
+        assertTrue(com.puresnap.app.util.MotionPhotoSynthesizer.isMotionPhoto(synthesized))
+
+        // 2. 验证末尾紧贴的是完整的 MP4 视频流
+        val videoOffset = mockMp4Video.size
+        val extractedVideo = synthesized.copyOfRange(synthesized.size - videoOffset, synthesized.size)
+        assertTrue(mockMp4Video.contentEquals(extractedVideo))
+
+        // 3. 验证 XMP 内容中包含 Google Camera / Android 标准实况元数据与偏移
+        val synthesizedStr = String(synthesized, Charsets.ISO_8859_1)
+        assertTrue(synthesizedStr.contains("Camera:MotionPhoto=\"1\""))
+        assertTrue(synthesizedStr.contains("GCamera:MicroVideo=\"1\""))
+        assertTrue(synthesizedStr.contains("GCamera:MicroVideoOffset=\"${mockMp4Video.size}\""))
+        assertTrue(synthesizedStr.contains("Container:Directory"))
+        assertTrue(synthesizedStr.contains("Item:Semantic=\"MotionPhoto\""))
+    }
 }

@@ -372,9 +372,10 @@ class PureSnapViewModel(application: Application) : AndroidViewModel(application
             if (result.savedEntities.isNotEmpty()) {
                 dao.insertDownloadedMedia(result.savedEntities)
                 val desc = when (mode) {
+                    LivePhotoExportMode.MOTION_PHOTO_JPEG -> "已保存原生实况照片至系统相册（长按播放动效）"
                     LivePhotoExportMode.STATIC_IMAGE_ONLY -> "已保存静态高清原图至相册"
                     LivePhotoExportMode.LIVE_VIDEO_ONLY -> "已导出实况动态视频 (MP4) 至相册"
-                    LivePhotoExportMode.BOTH_IMAGE_AND_MP4 -> "已同时导出静态高清原图 + 动态 MP4 至相册"
+                    LivePhotoExportMode.BOTH_IMAGE_AND_MP4 -> "已分别导出静态原图与动态 MP4 至相册"
                 }
                 Toast.makeText(context, desc, Toast.LENGTH_SHORT).show()
             } else {

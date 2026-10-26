@@ -44,6 +44,12 @@ object MediaStoreArchiver {
         val folderPathSummary: String
     )
 
+    private enum class ArchiverTaskType {
+        IMAGE,
+        VIDEO,
+        MOTION_PHOTO
+    }
+
     suspend fun saveSelectedMediaBatch(
         context: Context,
         post: ParsedPost,
@@ -58,23 +64,26 @@ object MediaStoreArchiver {
             return@withContext BatchSaveResult(emptyList(), 0, 0, "")
         }
 
-        val expandedTasks = mutableListOf<Pair<MediaItem, Boolean>>() // second = saveAsVideo
+        val expandedTasks = mutableListOf<Pair<MediaItem, ArchiverTaskType>>()
         for (item in itemsToSave) {
             if (item.isLivePhoto && !item.liveVideoUrl.isNullOrBlank()) {
                 when (livePhotoExportMode) {
+                    LivePhotoExportMode.MOTION_PHOTO_JPEG -> {
+                        expandedTasks.add(item to ArchiverTaskType.MOTION_PHOTO)
+                    }
                     LivePhotoExportMode.BOTH_IMAGE_AND_MP4 -> {
-                        expandedTasks.add(item to false)
-                        expandedTasks.add(item to true)
+                        expandedTasks.add(item to ArchiverTaskType.IMAGE)
+                        expandedTasks.add(item to ArchiverTaskType.VIDEO)
                     }
                     LivePhotoExportMode.STATIC_IMAGE_ONLY -> {
-                        expandedTasks.add(item to false)
+                        expandedTasks.add(item to ArchiverTaskType.IMAGE)
                     }
                     LivePhotoExportMode.LIVE_VIDEO_ONLY -> {
-                        expandedTasks.add(item to true)
+                        expandedTasks.add(item to ArchiverTaskType.VIDEO)
                     }
                 }
             } else {
-                expandedTasks.add(item to item.isVideo)
+                expandedTasks.add(item to if (item.isVideo) ArchiverTaskType.VIDEO else ArchiverTaskType.IMAGE)
             }
         }
 
@@ -83,27 +92,39 @@ object MediaStoreArchiver {
         val semaphore = Semaphore(4)
 
         val savedEntities = coroutineScope {
-            expandedTasks.mapIndexed { taskIndex, (item, saveAsVideo) ->
+            expandedTasks.mapIndexed { taskIndex, (item, taskType) ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
-                        val entity = if (saveAsVideo) {
-                            saveVideoItemToMediaStore(
-                                context = context,
-                                post = post,
-                                item = item,
-                                modifyMd5 = modifyMd5,
-                                customCookie = customCookie,
-                                suffixIndex = taskIndex
-                            )
-                        } else {
-                            saveImageItemToMediaStore(
-                                context = context,
-                                post = post,
-                                item = item,
-                                exportFormatMode = exportFormatMode,
-                                modifyMd5 = modifyMd5,
-                                customCookie = customCookie
-                            )
+                        val entity = when (taskType) {
+                            ArchiverTaskType.MOTION_PHOTO -> {
+                                saveMotionPhotoItemToMediaStore(
+                                    context = context,
+                                    post = post,
+                                    item = item,
+                                    modifyMd5 = modifyMd5,
+                                    customCookie = customCookie
+                                )
+                            }
+                            ArchiverTaskType.VIDEO -> {
+                                saveVideoItemToMediaStore(
+                                    context = context,
+                                    post = post,
+                                    item = item,
+                                    modifyMd5 = modifyMd5,
+                                    customCookie = customCookie,
+                                    suffixIndex = taskIndex
+                                )
+                            }
+                            ArchiverTaskType.IMAGE -> {
+                                saveImageItemToMediaStore(
+                                    context = context,
+                                    post = post,
+                                    item = item,
+                                    exportFormatMode = exportFormatMode,
+                                    modifyMd5 = modifyMd5,
+                                    customCookie = customCookie
+                                )
+                            }
                         }
                         val done = completedCounter.incrementAndGet()
                         onProgress(done, totalTasks)
@@ -332,6 +353,120 @@ object MediaStoreArchiver {
                 width = realW,
                 height = realH,
                 format = targetExtension.uppercase(),
+                fileSizeBytes = finalBytes.size.toLong(),
+                md5Hash = md5Hex,
+                md5Modified = modifyMd5,
+                visualSeed = item.visualSeed,
+                downloadedAtMillis = System.currentTimeMillis()
+            )
+        } catch (_: Exception) {
+            resolver.delete(itemUri, null, null)
+            null
+        }
+    }
+
+    private fun saveMotionPhotoItemToMediaStore(
+        context: Context,
+        post: ParsedPost,
+        item: MediaItem,
+        modifyMd5: Boolean,
+        customCookie: String?
+    ): DownloadedMediaEntity? {
+        // 1. 下载静态高清原图字节流（优先无损 originUrl，回退 previewUrl）
+        var imageBytes = DynamicMediaRenderer.downloadRemoteBytes(
+            urlStr = item.originUrl,
+            platform = post.platform,
+            customCookie = customCookie,
+            timeoutMs = 20_000
+        )
+        if ((imageBytes == null || imageBytes.size < 1024) && item.previewUrl != item.originUrl) {
+            imageBytes = DynamicMediaRenderer.downloadRemoteBytes(
+                urlStr = item.previewUrl,
+                platform = post.platform,
+                customCookie = customCookie,
+                timeoutMs = 20_000
+            )
+        }
+
+        if (imageBytes == null || imageBytes.size < 256) return null
+
+        // 2. 下载实况动态短视频 MP4 流
+        val videoUrl = item.liveVideoUrl
+        var videoBytes: ByteArray? = null
+        if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http")) {
+            videoBytes = DynamicMediaRenderer.downloadRemoteBytes(
+                urlStr = videoUrl,
+                platform = post.platform,
+                customCookie = customCookie,
+                timeoutMs = 30_000
+            )
+        }
+
+        // 3. 将 JPEG 与 MP4 字节流无损合成 Android 标准 Motion Photo (XMP 容器 + 尾部 MP4 挂载)
+        val finalBytes: ByteArray
+        val isSynthesized: Boolean
+        val decodedBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        val realW = decodedBitmap?.width ?: item.width
+        val realH = decodedBitmap?.height ?: item.height
+
+        if (videoBytes != null && videoBytes.size > 2048) {
+            val synthesized = runCatching {
+                MotionPhotoSynthesizer.synthesizeMotionPhoto(imageBytes, videoBytes)
+            }.getOrNull()
+
+            if (synthesized != null && synthesized.size > imageBytes.size) {
+                finalBytes = if (modifyMd5) appendMd5SaltBytes(synthesized) else synthesized
+                isSynthesized = true
+            } else {
+                finalBytes = if (modifyMd5) appendMd5SaltBytes(imageBytes) else imageBytes
+                isSynthesized = false
+            }
+        } else {
+            // 实况视频下载若受限，优雅降级为保存静态原图
+            finalBytes = if (modifyMd5) appendMd5SaltBytes(imageBytes) else imageBytes
+            isSynthesized = false
+        }
+
+        val md5Hex = computeMd5Hex(finalBytes)
+        val relativePath = "${Environment.DIRECTORY_PICTURES}/PureSnap/${post.platform.folderName}"
+        val ext = if (isSynthesized) "MP.jpg" else "jpg"
+        val fileName = "PureSnap_${post.platform.folderName}_${post.noteId}_LIVE_P${item.index + 1}_${System.currentTimeMillis() % 100000}.$ext"
+
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.WIDTH, realW)
+            put(MediaStore.Images.Media.HEIGHT, realH)
+            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+
+        val resolver = context.contentResolver
+        val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val itemUri = resolver.insert(collection, values) ?: return null
+
+        return try {
+            resolver.openOutputStream(itemUri)?.use { out ->
+                out.write(finalBytes)
+                out.flush()
+            }
+            val completeValues = ContentValues().apply {
+                put(MediaStore.Images.Media.IS_PENDING, 0)
+            }
+            resolver.update(itemUri, completeValues, null, null)
+            notifyMediaScanner(context, itemUri)
+
+            DownloadedMediaEntity(
+                mediaStoreUri = itemUri.toString(),
+                fileName = fileName,
+                relativePath = "$relativePath/$fileName",
+                platform = post.platform.name,
+                authorName = post.authorName,
+                title = post.title.ifBlank { post.content }.take(40).ifBlank { "${post.platform.displayName}实况照片" },
+                mediaKind = MediaKind.LIVE_PHOTO.name,
+                width = realW,
+                height = realH,
+                format = if (isSynthesized) "LIVE.JPG" else "JPG",
                 fileSizeBytes = finalBytes.size.toLong(),
                 md5Hash = md5Hex,
                 md5Modified = modifyMd5,
