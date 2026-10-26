@@ -389,13 +389,6 @@ object MultiPlatformParserEngine {
                     "https://aweme.snssdk.com/aweme/v1/play/?video_id=$it&ratio=1080p&line=0"
                 }
 
-            val descLower = desc.lowercase()
-            val isPostLivePhoto = itemObj.optBool("is_live_photo", false) ||
-                itemObj.optBool("is_live", false) ||
-                itemObj.optStr("aweme_type") in listOf("2", "68", "150") ||
-                itemObj.optObj("live_photo") != null ||
-                (descLower.contains("实况") || descLower.contains("livephoto") || descLower.contains("live photo"))
-
             if (imagesArr != null && imagesArr.size() > 0) {
                 for (i in 0 until imagesArr.size()) {
                     val imgObj = imagesArr.get(i).takeIf { it.isJsonObject }?.asJsonObject ?: continue
@@ -433,10 +426,6 @@ object MultiPlatformParserEngine {
                         ?: imgObj.optObj("origin_image")?.optInt("height", 0)?.takeIf { it > 0 }
                         ?: 1440
 
-                    val perImageVideoUrl = extractDouyinLivePhotoVideo(imgObj)
-                    val effectiveLiveVideoUrl = perImageVideoUrl ?: rootLiveVideoUrl
-                    val isLive = isPostLivePhoto || isDouyinLivePhoto(imgObj) || !effectiveLiveVideoUrl.isNullOrBlank()
-                    val itemVideoUrl = if (isLive) effectiveLiveVideoUrl else null
                     val is4K = w >= 2160 || h >= 2160
                     val fmt = if (bestOriginUrl.lowercase().contains(".webp")) "WEBP" else "JPG"
 
@@ -444,15 +433,11 @@ object MultiPlatformParserEngine {
                         MediaItem(
                             id = "${awemeId}_dy_img_$i",
                             index = i,
-                            kind = if (isLive) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,
-                            badge = when {
-                                isLive -> QualityBadge.LIVE
-                                is4K -> QualityBadge.FOUR_K
-                                else -> QualityBadge.RAW
-                            },
+                            kind = MediaKind.IMAGE,
+                            badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
                             originUrl = bestOriginUrl,
                             previewUrl = previewUrl,
-                            liveVideoUrl = itemVideoUrl,
+                            liveVideoUrl = null,
                             width = w,
                             height = h,
                             format = fmt,
@@ -525,7 +510,6 @@ object MultiPlatformParserEngine {
             } else null
 
             val postTypeLabel = when {
-                mediaItems.any { it.isLivePhoto } -> "抖音·实况图"
                 mediaItems.any { it.isVideo } -> "抖音·视频"
                 else -> "抖音·图集"
             }
@@ -688,10 +672,6 @@ object MultiPlatformParserEngine {
                         rewriteToLosslessOriginUrl(previewUrl, PlatformType.XIAOHONGSHU, preferences.xhsCdnHostRule)
                     }
 
-                    val isLive = isXiaohongshuLivePhoto(imgObj)
-                    val liveMp4Url = extractXiaohongshuLivePhotoVideo(imgObj)
-                    val isLiveEffective = isLive || !liveMp4Url.isNullOrBlank()
-
                     val w = imgObj.optInt("width", 1440).coerceAtLeast(720)
                     val h = imgObj.optInt("height", 1920).coerceAtLeast(960)
                     val is4K = w >= 2560 || h >= 2560
@@ -700,15 +680,11 @@ object MultiPlatformParserEngine {
                         MediaItem(
                             id = "${noteId}_xhs_img_$i",
                             index = i,
-                            kind = if (isLiveEffective) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,
-                            badge = when {
-                                isLiveEffective -> QualityBadge.LIVE
-                                is4K -> QualityBadge.FOUR_K
-                                else -> QualityBadge.RAW
-                            },
+                            kind = MediaKind.IMAGE,
+                            badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
                             originUrl = losslessUrl,
                             previewUrl = previewUrl,
-                            liveVideoUrl = liveMp4Url,
+                            liveVideoUrl = null,
                             width = w,
                             height = h,
                             format = "PNG",
@@ -723,7 +699,6 @@ object MultiPlatformParserEngine {
             if (mediaItems.isEmpty()) return null
 
             val xhsPostTypeLabel = when {
-                mediaItems.any { it.isLivePhoto } -> "小红书·实况图"
                 mediaItems.any { it.isVideo } -> "小红书·视频"
                 else -> "小红书·图集"
             }
@@ -1209,28 +1184,21 @@ object MultiPlatformParserEngine {
         val targetImages = if (sniff.ogImages.isNotEmpty()) sniff.ogImages else imageCandidates.toList()
         val hasMultipleImages = targetImages.size > 1
         val hasVideo = videoCandidates.isNotEmpty()
-        val titleOrDesc = (sniff.ogTitle + " " + sniff.title + " " + sniff.ogDesc + " " + rawInput).lowercase()
-        val hasLiveHint = titleOrDesc.contains("实况") || titleOrDesc.contains("livephoto") || titleOrDesc.contains("live photo")
 
-        if (hasMultipleImages && (hasVideo || hasLiveHint)) {
-            // 图文实况图集（包含多张图片与关联实况动态视频流）
-            val liveVid = videoCandidates.firstOrNull()
-            val losslessVid = liveVid?.let { rewriteToLosslessOriginUrl(it, platform, preferences.xhsCdnHostRule) }
+        if (hasMultipleImages) {
             targetImages.distinct().take(35).forEachIndexed { idx, rawImgUrl ->
                 val preview = rawImgUrl.replace("http://", "https://")
                 val lossless = rewriteToLosslessOriginUrl(preview, platform, preferences.xhsCdnHostRule)
-                val isItemLive = hasVideo || hasLiveHint
                 mediaItems.add(
                     MediaItem(
                         id = "${workId}_img_$idx",
                         index = idx,
-                        kind = if (isItemLive) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,
-                        badge = if (isItemLive) QualityBadge.LIVE else QualityBadge.RAW,
+                        kind = MediaKind.IMAGE,
+                        badge = QualityBadge.RAW,
                         originUrl = lossless,
                         previewUrl = preview,
-                        liveVideoUrl = losslessVid,
-                        width = 1080,
-                        height = 1440,
+                        width = 1440,
+                        height = 1920,
                         format = if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG",
                         colorSpace = "Display P3",
                         themeTitle = sniff.ogTitle.ifBlank { sniff.title },
@@ -1238,7 +1206,7 @@ object MultiPlatformParserEngine {
                     )
                 )
             }
-        } else if (hasVideo && (!hasMultipleImages || platform == PlatformType.DOUYIN && targetImages.size <= 1)) {
+        } else if (hasVideo) {
             val rawVid = videoCandidates.first()
             val losslessVid = rewriteToLosslessOriginUrl(rawVid, platform, preferences.xhsCdnHostRule)
             mediaItems.add(
@@ -1249,7 +1217,7 @@ object MultiPlatformParserEngine {
                     badge = QualityBadge.VIDEO_HD,
                     originUrl = losslessVid,
                     previewUrl = firstCover.ifBlank { losslessVid },
-                    liveVideoUrl = losslessVid,
+                    liveVideoUrl = null,
                     width = 1080,
                     height = 1920,
                     format = "MP4",
@@ -1290,7 +1258,6 @@ object MultiPlatformParserEngine {
         val cleanDesc = sniff.ogDesc.ifBlank { cleanTitle }
 
         val postTypeLabel = when {
-            mediaItems.any { it.isLivePhoto } -> "${platform.displayName}·实况图"
             mediaItems.any { it.isVideo } -> "${platform.displayName}·视频"
             else -> "${platform.displayName}·图集"
         }
@@ -1581,164 +1548,6 @@ object MultiPlatformParserEngine {
             }
         }
         return null
-    }
-
-    private fun extractXiaohongshuLivePhotoVideo(imgObj: JsonObject): String? {
-        // 1. 直接检查常见视频/实况直链字段
-        val directKeys = listOf(
-            "livePhotoUrl", "live_photo_url", "liveVideoUrl", "live_video_url",
-            "videoUrl", "video_url", "playUrl", "play_url"
-        )
-        for (key in directKeys) {
-            val u = imgObj.optStr(key)
-            if (u.isNotBlank()) {
-                return u.replace("\\u002F", "/").replace("http://", "https://")
-            }
-        }
-
-        // 2. 检查 livePhoto / live_photo / video / media 子对象内的直接直链
-        val candidateSubObjs = listOfNotNull(
-            imgObj.optObj("livePhoto"),
-            imgObj.optObj("live_photo"),
-            imgObj.optObj("video"),
-            imgObj.optObj("media")
-        )
-        for (sub in candidateSubObjs) {
-            for (key in listOf("url", "masterUrl", "mainUrl", "videoUrl", "playUrl", "src", "livePhotoUrl")) {
-                val u = sub.optStr(key)
-                if (u.isNotBlank()) {
-                    return u.replace("\\u002F", "/").replace("http://", "https://")
-                }
-            }
-            extractFirstUrlFromArray(sub.optArr("url_list"))?.let { return it }
-            extractFirstUrlFromArray(sub.optArr("play_url_list"))?.let { return it }
-        }
-
-        // 3. 检查流媒体对象 stream 中的各编码格式 (h264, h265, av1, hdr)
-        val candidateStreams = listOfNotNull(
-            imgObj.optObj("stream"),
-            imgObj.optObj("livePhoto")?.optObj("stream"),
-            imgObj.optObj("live_photo")?.optObj("stream"),
-            imgObj.optObj("livePhoto")?.optObj("media")?.optObj("stream"),
-            imgObj.optObj("live_photo")?.optObj("media")?.optObj("stream"),
-            imgObj.optObj("media")?.optObj("stream"),
-            imgObj.optObj("video")?.optObj("stream"),
-            imgObj.optObj("video")?.optObj("media")?.optObj("stream")
-        )
-
-        for (stream in candidateStreams) {
-            for (codec in listOf("h264", "h265", "av1", "hdr")) {
-                val codecArr = stream.optArr(codec) ?: continue
-                for (i in 0 until codecArr.size()) {
-                    val track = codecArr.get(i).takeIf { it.isJsonObject }?.asJsonObject ?: continue
-                    val urlCandidate = track.optStr("masterUrl").takeIf { it.isNotBlank() }
-                        ?: track.optStr("mainUrl").takeIf { it.isNotBlank() }
-                        ?: track.optStr("url").takeIf { it.isNotBlank() }
-                        ?: extractFirstUrlFromArray(track.optArr("backupUrls"))
-                    if (!urlCandidate.isNullOrBlank()) {
-                        return urlCandidate.replace("\\u002F", "/").replace("http://", "https://")
-                    }
-                }
-            }
-        }
-
-        // 4. 检查是否有 videoKey / originVideoKey / fileId 等直连 CDN 键
-        val candidateKeys = listOfNotNull(
-            imgObj.optObj("livePhoto")?.optStr("videoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optObj("livePhoto")?.optStr("originVideoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optObj("live_photo")?.optStr("videoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optObj("stream")?.optStr("videoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optObj("stream")?.optStr("originVideoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optObj("media")?.optStr("videoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optObj("consumer")?.optStr("originVideoKey")?.takeIf { it.isNotBlank() },
-            imgObj.optStr("livePhotoFileId").takeIf { it.isNotBlank() }
-        )
-        for (key in candidateKeys) {
-            return "https://sns-video-bd.xhscdn.com/$key"
-        }
-
-        return null
-    }
-
-    private fun isXiaohongshuLivePhoto(imgObj: JsonObject): Boolean {
-        if (imgObj.optBool("livePhoto", false) ||
-            imgObj.optBool("live_photo", false) ||
-            imgObj.optBool("isLivePhoto", false) ||
-            imgObj.optBool("is_live_photo", false)
-        ) {
-            return true
-        }
-
-        val livePrimitive = imgObj.get("livePhoto") ?: imgObj.get("live_photo")
-        if (livePrimitive != null) {
-            if (livePrimitive.isJsonPrimitive) {
-                val str = livePrimitive.asString.trim().lowercase()
-                if (str == "true" || str == "1" || str == "yes") return true
-            } else if (livePrimitive.isJsonObject) {
-                return true
-            }
-        }
-
-        if (imgObj.has("stream") || imgObj.has("livePhoto") || imgObj.has("live_photo")) {
-            if (extractXiaohongshuLivePhotoVideo(imgObj) != null) return true
-        }
-
-        return false
-    }
-
-    private fun extractDouyinLivePhotoVideo(imgObj: JsonObject): String? {
-        // 1. 常见视频对象 play_addr
-        val candidateArrays = listOfNotNull(
-            imgObj.optObj("video")?.optObj("play_addr")?.optArr("url_list"),
-            imgObj.optObj("video")?.optObj("play_addr_h264")?.optArr("url_list"),
-            imgObj.optObj("live_photo")?.optObj("video")?.optObj("play_addr")?.optArr("url_list"),
-            imgObj.optObj("live_photo")?.optObj("play_addr")?.optArr("url_list"),
-            imgObj.optObj("live_photo")?.optArr("url_list"),
-            imgObj.optObj("clip_video")?.optObj("play_addr")?.optArr("url_list")
-        )
-        for (arr in candidateArrays) {
-            val u = extractFirstUrlFromArray(arr)
-            if (!u.isNullOrBlank()) {
-                return rewriteToLosslessOriginUrl(u, PlatformType.DOUYIN)
-            }
-        }
-
-        // 2. 字段直接为字符串 URL
-        val directStrKeys = listOf("live_photo_url", "live_video_url", "video_url")
-        for (k in directStrKeys) {
-            val u = imgObj.optStr(k)
-            if (u.isNotBlank()) {
-                return rewriteToLosslessOriginUrl(u, PlatformType.DOUYIN)
-            }
-        }
-        val liveObj = imgObj.optObj("live_photo")
-        if (liveObj != null) {
-            for (k in listOf("url", "play_url", "video_url", "play_addr")) {
-                val u = liveObj.optStr(k)
-                if (u.isNotBlank()) {
-                    return rewriteToLosslessOriginUrl(u, PlatformType.DOUYIN)
-                }
-            }
-        }
-
-        // 3. 检查是否有 video uri 构造无水印直链
-        val uri = imgObj.optObj("video")?.optStr("uri")?.takeIf { it.isNotBlank() }
-            ?: imgObj.optObj("live_photo")?.optStr("uri")?.takeIf { it.isNotBlank() }
-            ?: imgObj.optObj("live_photo")?.optObj("video")?.optStr("uri")?.takeIf { it.isNotBlank() }
-        if (!uri.isNullOrBlank()) {
-            return "https://aweme.snssdk.com/aweme/v1/play/?video_id=$uri&ratio=1080p&line=0"
-        }
-
-        return null
-    }
-
-    private fun isDouyinLivePhoto(imgObj: JsonObject): Boolean {
-        val type = imgObj.optStr("type").trim().lowercase()
-        val mediaType = imgObj.optStr("media_type").trim().lowercase()
-        if (type == "live_photo" || mediaType == "live_photo") return true
-        if (imgObj.optBool("is_live_photo", false) || imgObj.optBool("is_live", false)) return true
-        if (imgObj.optObj("live_photo") != null) return true
-        return false
     }
 
     private fun extractXiaohongshuPreviewUrl(imgObj: JsonObject): String? {

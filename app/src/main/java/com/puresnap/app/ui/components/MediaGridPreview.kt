@@ -38,8 +38,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
@@ -228,17 +226,6 @@ private fun MediaGridCell(
         isLoading = false
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "live_badge_pulse")
-    val livePulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(750),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "live_scale"
-    )
-
     Box(
         modifier = modifier
             .aspectRatio(aspectRatio)
@@ -303,9 +290,8 @@ private fun MediaGridCell(
                 )
         )
 
-        // 左上角：画质/实况角标 ([4K], [LIVE], [原图], [1080P])
+        // 左上角：画质角标 ([4K], [原图], [1080P])
         val badgeBgColor = when (item.badge) {
-            QualityBadge.LIVE -> Color(0xFFE11D48)
             QualityBadge.FOUR_K -> Color(0xFF4F46E5)
             QualityBadge.VIDEO_HD -> Color(0xFF0284C7)
             else -> Color(0xFF2563EB)
@@ -317,21 +303,11 @@ private fun MediaGridCell(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(6.dp)
-                .scale(if (item.isLivePhoto) livePulseScale else 1f)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
             ) {
-                if (item.isLivePhoto) {
-                    Icon(
-                        imageVector = Icons.Default.MotionPhotosOn,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(10.dp)
-                    )
-                    Spacer(modifier = Modifier.width(2.dp))
-                }
                 Text(
                     text = item.badge.text,
                     color = Color.White,
@@ -528,21 +504,17 @@ private fun ZoomableMediaPreviewDialog(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(
-                            imageVector = when {
-                                item.isVideo -> Icons.Default.Videocam
-                                item.isLivePhoto -> Icons.Default.MotionPhotosOn
-                                else -> Icons.Default.ZoomIn
-                            },
+                            imageVector = if (item.isVideo) Icons.Default.Videocam else Icons.Default.ZoomIn,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = when {
-                                item.isVideo -> "无水印视频预览 · ${item.resolutionLabel}"
-                                item.isLivePhoto -> "LIVE 实况原画预览 · ${item.resolutionLabel}"
-                                else -> "双指缩放 (${String.format("%.1fx", scale)}) · ${item.resolutionLabel}"
+                            text = if (item.isVideo) {
+                                "无水印视频预览 · ${item.resolutionLabel}"
+                            } else {
+                                "双指缩放 (${String.format("%.1fx", scale)}) · ${item.resolutionLabel}"
                             },
                             color = Color.White,
                             fontSize = 12.sp

@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Videocam
@@ -87,7 +86,7 @@ import java.util.Locale
 
 /**
  * Tab 2：媒体库（Gallery）
- * 负责本地已下载图集/视频/实况/音频的分类瀑布流浏览（LazyVerticalStaggeredGrid）与批量管理。
+ * 负责本地已下载图集/视频/音频的分类瀑布流浏览（LazyVerticalStaggeredGrid）与批量管理。
  */
 @Composable
 fun GalleryScreen(
@@ -255,8 +254,7 @@ fun GalleryScreen(
         ) {
             val kindFilters = listOf(
                 "ALL" to "全部类型",
-                MediaKind.IMAGE.name to "静态原图",
-                MediaKind.LIVE_PHOTO.name to "LIVE 实况",
+                MediaKind.IMAGE.name to "无损原图",
                 MediaKind.VIDEO.name to "高清视频",
                 MediaKind.AUDIO.name to "提取音频"
             )
@@ -804,7 +802,7 @@ private fun GalleryWaterfallCard(
                             )
                         }
                     }
-                } else if (entity.mediaKind == MediaKind.LIVE_PHOTO.name || entity.mediaKind == MediaKind.VIDEO.name) {
+                } else if (entity.mediaKind == MediaKind.VIDEO.name) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.55f),
                         shape = CircleShape,
@@ -813,8 +811,7 @@ private fun GalleryWaterfallCard(
                             .padding(8.dp)
                     ) {
                         Icon(
-                            imageVector = if (entity.mediaKind == MediaKind.LIVE_PHOTO.name)
-                                Icons.Default.MotionPhotosOn else Icons.Default.Videocam,
+                            imageVector = Icons.Default.Videocam,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier

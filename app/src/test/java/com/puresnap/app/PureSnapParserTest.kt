@@ -151,11 +151,11 @@ class PureSnapParserTest {
             preferences = UserPreferencesState()
         )
         assertNotNull(post)
-        assertEquals("小红书·实况图", post!!.postTypeLabel)
+        assertEquals("小红书·图集", post!!.postTypeLabel)
         assertEquals(1, post.mediaItems.size)
         val item = post.mediaItems[0]
-        assertTrue("Item should be Live Photo", item.isLivePhoto)
-        assertEquals("https://sns-video-bd.xhscdn.com/stream/live_disney_h265.mp4", item.liveVideoUrl)
+        assertEquals(com.puresnap.app.model.MediaKind.IMAGE, item.kind)
+        assertEquals(com.puresnap.app.model.QualityBadge.FOUR_K, item.badge)
         assertEquals("https://ci.xiaohongshu.com/1040g00831livetrace?imageView2/2/w/0/format/png", item.originUrl)
     }
 
@@ -173,19 +173,17 @@ class PureSnapParserTest {
             preferences = UserPreferencesState()
         )
         assertNotNull(post)
-        assertEquals("抖音·实况图", post!!.postTypeLabel)
+        assertEquals("抖音·图集", post!!.postTypeLabel)
         assertEquals(1, post.mediaItems.size)
         val item = post.mediaItems[0]
-        assertTrue("Item should be Live Photo", item.isLivePhoto)
-        assertNotNull(item.liveVideoUrl)
-        assertTrue(item.liveVideoUrl!!.contains("/play/"))
-        assertFalse(item.liveVideoUrl!!.contains("playwm"))
+        assertEquals(com.puresnap.app.model.MediaKind.IMAGE, item.kind)
+        assertEquals(com.puresnap.app.model.QualityBadge.RAW, item.badge)
         assertEquals("https://p3.douyinpic.com/sunset_display.jpeg", item.originUrl)
     }
 
     @Test
     fun testDouyinRealLivePhotoAwemeDetailRootVideoExtraction() {
-        // 抖音真实实况图文结构：is_live_photo=true，图片在 images 列表中，动态视频在根级 video.play_addr
+        // 抖音真实实况图文结构：统一提取为高清原图图集
         val sampleHtml = """
             <html><body><script>
             window._ROUTER_DATA = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[{"aweme_id":"7700131720217898162","desc":">﹏<# 中华风lolita 实况图","is_live_photo":true,"author":{"nickname":"许知意","unique_id":"xuzhiyi","avatar_larger":{"url_list":["https://p3.douyinpic.com/avatar_xzy.jpeg"]}},"images":[{"display_image":{"url_list":["https://p3.douyinpic.com/photo1.jpeg"]},"width":1080,"height":1440},{"display_image":{"url_list":["https://p3.douyinpic.com/photo2.jpeg"]},"width":1080,"height":1440}],"video":{"play_addr":{"url_list":["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v0200xuzhiyi_live&line=0"]}}}]}}}};
@@ -198,15 +196,13 @@ class PureSnapParserTest {
             preferences = UserPreferencesState()
         )
         assertNotNull(post)
-        assertEquals("抖音·实况图", post!!.postTypeLabel)
+        assertEquals("抖音·图集", post!!.postTypeLabel)
         assertEquals("许知意", post.authorName)
         assertEquals(2, post.mediaItems.size)
 
         for (item in post.mediaItems) {
-            assertTrue("Every item in live photo post must be LIVE_PHOTO", item.isLivePhoto)
-            assertNotNull(item.liveVideoUrl)
-            assertTrue(item.liveVideoUrl!!.contains("/play/"))
-            assertFalse(item.liveVideoUrl!!.contains("playwm"))
+            assertEquals(com.puresnap.app.model.MediaKind.IMAGE, item.kind)
+            assertEquals(com.puresnap.app.model.QualityBadge.RAW, item.badge)
         }
     }
 }

@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * 直接拉取真实平台 CDN 无水印媒体流，支持：
  * 1. 按平台自动建立子文件夹（如 Pictures/PureSnap/Xiaohongshu、Movies/PureSnap/Douyin）
  * 2. WebP/HEIC 原图兼容模式（100% 品质 JPEG 无损转封装）与 PNG / 原格式直出
- * 3. 小红书/抖音实况图（Live Photo）静态高清原图 + 动态 MP4 双模导出
+ * 3. 独立高清原图与视频多任务并发下载与状态管理
  * 4. 可选文件末尾微调字节改变 MD5 值（适合二创防重）
  */
 object MediaStoreArchiver {

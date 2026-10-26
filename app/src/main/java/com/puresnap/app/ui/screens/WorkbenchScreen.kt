@@ -662,8 +662,8 @@ fun WorkbenchScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     FeatureGuideRow(
                         icon = Icons.Default.HighQuality,
-                        title = "真·CDN 原画与 Live 实况直出",
-                        subtitle = "剥离平台压缩水印后缀，支持 4K 原图、小红书实况图双模导出与 100% 质量转码。"
+                        title = "真·CDN 无损原画直出",
+                        subtitle = "剥离平台压缩水印后缀，支持 4K 极清原图直出与 100% 最高画质转码。"
                     )
                 }
             }

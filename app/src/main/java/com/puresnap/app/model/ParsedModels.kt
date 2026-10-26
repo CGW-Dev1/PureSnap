@@ -1,21 +1,19 @@
 package com.puresnap.app.model
 
 /**
- * 媒体元素类型：支持静态原图、小红书实况图（静态高清图 + 动态 MP4）、独立高清视频、混合贴
+ * 媒体元素类型：支持静态原图、独立高清视频、背景音频
  */
 enum class MediaKind(val label: String) {
     IMAGE("原图"),
-    LIVE_PHOTO("实况"),
     VIDEO("视频"),
     AUDIO("音频")
 }
 
 /**
- * 缩略图左上角画质/实况角标
+ * 缩略图左上角画质角标
  */
 enum class QualityBadge(val text: String) {
     FOUR_K("4K"),
-    LIVE("LIVE"),
     RAW("原图"),
     VIDEO_HD("1080P"),
     HEIC_RAW("HEIC")
@@ -69,7 +67,7 @@ enum class ParseErrorType(
 }
 
 /**
- * 单张原图 / 实况图 / 视频条目模型
+ * 单张原图 / 视频条目模型
  */
 data class MediaItem(
     val id: String,
@@ -97,9 +95,6 @@ data class MediaItem(
             return String.format("%.1f MB", mb)
         }
 
-    val isLivePhoto: Boolean
-        get() = kind == MediaKind.LIVE_PHOTO || badge == QualityBadge.LIVE
-
     val isVideo: Boolean
         get() = kind == MediaKind.VIDEO
 }
@@ -126,7 +121,7 @@ data class ParsedPost(
     val extractedUrl: String,
     val noteId: String,
     val platform: PlatformType,
-    val postTypeLabel: String, // 例如 "小红书·图集"、"小红书·实况混合"、"抖音·高清视频"
+    val postTypeLabel: String, // 例如 "小红书·图集"、"抖音·高清视频"
     val authorName: String,
     val authorHandle: String,
     val authorAvatarUrl: String,

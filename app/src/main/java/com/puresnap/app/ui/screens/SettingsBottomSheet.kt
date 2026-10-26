@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
@@ -62,7 +61,6 @@ import com.puresnap.app.model.ExportFormatMode
  * 全局设置与高阶反爬配置抽屉
  * 包含：
  * - 原图格式转换引擎（兼容模式 100% JPG / 无损 PNG / 保持原格式）
- * - 实况图（Live Photo）导出策略
  * - 剪贴板智能感知开关
  * - MD5 修改与去重提醒开关（P2）
  * - Material You 动态壁纸取色与深浅色主题切换
