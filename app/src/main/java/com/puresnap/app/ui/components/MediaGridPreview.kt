@@ -469,7 +469,10 @@ private fun ZoomableMediaPreviewDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
         Box(
             modifier = Modifier
@@ -591,7 +594,8 @@ private fun ZoomableMediaPreviewDialog(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 26.dp, top = 8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
