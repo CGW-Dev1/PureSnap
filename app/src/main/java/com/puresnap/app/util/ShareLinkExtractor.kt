@@ -138,8 +138,8 @@ object ShareLinkExtractor {
      */
     fun extractWorkId(url: String, platform: PlatformType): String {
         val regexes = listOf(
-            Regex("""/(?:explore|discovery/item|item|note)/([a-zA-Z0-9_-]{8,32})"""),
-            Regex("""(?:aweme_id|modal_id|noteId|pid|id)=([a-zA-Z0-9_-]{5,32})"""),
+            Regex("""/(?:explore|discovery/item|item|note|photo)/([a-zA-Z0-9_-]{8,32})"""),
+            Regex("""(?:aweme_id|modal_id|noteId|photoId|pid|id)=([a-zA-Z0-9_-]{5,32})"""),
             Regex("""https?://[^/]+/([a-zA-Z0-9_-]{5,24})""")
         )
         for (regex in regexes) {

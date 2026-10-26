@@ -217,21 +217,6 @@ fun WorkbenchScreen(
                     maxLines = 1,
                     softWrap = false
                 )
-                Spacer(modifier = Modifier.width(7.dp))
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
-                        text = "RAW",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
             }
 
             // 右侧：[历史] 与 [设置] 胶囊尺寸完全一致 (74dp × 34dp)

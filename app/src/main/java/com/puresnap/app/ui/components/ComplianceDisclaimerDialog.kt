@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -137,24 +139,35 @@ fun ComplianceDisclaimerDialog(
                 Spacer(modifier = Modifier.height(18.dp))
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    TextButton(
+                    OutlinedButton(
                         onClick = onExitApp,
                         shape = CircleShape,
-                        modifier = Modifier.weight(0.38f)
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
                     ) {
-                        Text("不同意并退出")
+                        Text(
+                            text = "拒绝",
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
 
                     Button(
                         onClick = onAccept,
                         shape = CircleShape,
-                        modifier = Modifier.weight(0.62f)
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
                     ) {
                         Text(
-                            text = "同意并进入 PureSnap",
+                            text = "同意",
+                            fontSize = 14.5.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }

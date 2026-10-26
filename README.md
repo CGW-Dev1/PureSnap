@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Platform-Android%2010%2B%20(API%2029%2B)-2563EB?logo=android&logoColor=white" alt="Android 10+" />
   <img src="https://img.shields.io/badge/UI-Jetpack%20Compose%20%2B%20Material%203-0284C7?logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
   <img src="https://img.shields.io/badge/Language-Kotlin%202.0-4F46E5?logo=kotlin&logoColor=white" alt="Kotlin 2.0" />
-  <img src="https://img.shields.io/badge/Release-v1.1.0-2563EB" alt="Release v1.1.0" />
+  <img src="https://img.shields.io/badge/Release-v1.2.0-2563EB" alt="Release v1.2.0" />
 </p>
 
 **PureSnap** 是一款基于 **Material Design 3** 与 **Jetpack Compose** 构建的 Android 原生系统级无感原画提取工具，采用**皇家宝石蓝与冰川蓝（Sapphire & Glacier Blue）**现代卡片设计体系。专注于解决社交平台去水印工具常见的「画质二次压缩、广告弹窗泛滥、跨应用频繁切换」三大痛点，提供**极短操作路径、真原画质无损提取、多图集高效批量管理与零广告清爽交互**。
@@ -68,7 +68,7 @@ PureSnap/
 
 请前往右侧 **[Releases](../../releases)** 页面下载最新构建的 Android 安装包：
 
-- **最新安装包 (`v1.1.0`)**：`PureSnap-v1.1.0.apk`（支持 Android 10 / API 29 及以上设备）
+- **最新安装包 (`v1.2.0`)**：`PureSnap-v1.2.0.apk`（支持 Android 10 / API 29 及以上设备）
 
 ### 本地编译构建
 

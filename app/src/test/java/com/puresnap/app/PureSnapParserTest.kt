@@ -95,6 +95,38 @@ class PureSnapParserTest {
     }
 
     @Test
+    fun testKuaishouShareCommandExtraction() {
+        val raw = "https://v.kuaishou.com/KqdE2rZN 我承认我是天使 只是偶尔有点坏 \"萌了个萌假发 \"草莓空想曲Lolita \"合照 该作品在快手被播放过"
+        val res = ShareLinkExtractor.extract(raw)
+        assertEquals(PlatformType.KUAISHOU, res.platform)
+        assertEquals("https://v.kuaishou.com/KqdE2rZN", res.cleanUrl)
+    }
+
+    @Test
+    fun testKuaishouInitStateRealHtmlExtraction() {
+        val sampleHtml = """
+            <html><body><script>
+            window.INIT_STATE = {"demo_key":{"result":1,"photo":{"singlePicture":true,"width":3072,"height":4096,"caption":"我承认我是天使 只是偶尔有点坏 #草莓空想曲Lolita","userName":"快手摄影师","headUrl":"https://p22.a.yximgs.com/avatar.jpg","coverUrls":[{"cdn":"p5.a.yximgs.com","url":"https://p5.a.yximgs.com/upic/sample_photo.jpg?bp=10000"}]},"single":{"music":"/ufile/atlas/sample_music.m4a","musicCdnList":[{"cdn":"txmov2.a.kwimgs.com"}]}}};
+            </script></body></html>
+        """.trimIndent()
+
+        val post = MultiPlatformParserEngine.parseFromWebViewHtml(
+            url = "https://v.m.chenzhongtech.com/fw/photo/3x3ix6nir8gdcay",
+            html = sampleHtml,
+            preferences = UserPreferencesState()
+        )
+        assertNotNull(post)
+        assertEquals("快手摄影师", post!!.authorName)
+        assertTrue(post.content.contains("我承认我是天使"))
+        assertEquals(1, post.mediaItems.size)
+        assertEquals(3072, post.mediaItems[0].width)
+        assertEquals(4096, post.mediaItems[0].height)
+        assertFalse(post.mediaItems[0].originUrl.contains("bp=10000"))
+        assertNotNull(post.bgmAudio)
+        assertEquals("https://txmov2.a.kwimgs.com/ufile/atlas/sample_music.m4a", post.bgmAudio!!.url)
+    }
+
+    @Test
     fun testMd5ModificationProducesDistinctHash() {
         val originalBytes = "PureSnapLosslessImageHeaderAndPayload".toByteArray(Charsets.UTF_8)
         val originalMd5 = MediaStoreArchiver.computeMd5Hex(originalBytes)

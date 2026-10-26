@@ -1,11 +1,15 @@
 package com.puresnap.app.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -35,9 +39,11 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -233,30 +239,37 @@ fun SettingsBottomSheet(
 
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     val modes = listOf(0 to "跟随系统", 1 to "浅色模式", 2 to "深色模式")
                     modes.forEach { (modeCode, label) ->
                         val isSelected = preferences.darkThemeMode == modeCode
-                        androidx.compose.material3.Surface(
+                        Surface(
                             shape = CircleShape,
                             color = if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surface,
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                            ),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(34.dp)
+                                .height(36.dp)
+                                .clip(CircleShape)
                                 .clickable { prefsRepo.setDarkThemeMode(modeCode) }
                         ) {
-                            androidx.compose.foundation.layout.Box(
+                            Box(
                                 contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxHeight()
+                                modifier = Modifier.fillMaxSize()
                             ) {
                                 Text(
                                     text = label,
-                                    fontSize = 12.sp,
+                                    fontSize = 12.5.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isSelected) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    else MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     softWrap = false
                                 )
@@ -322,6 +335,7 @@ fun SettingsBottomSheet(
 
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     OutlinedButton(
@@ -330,15 +344,24 @@ fun SettingsBottomSheet(
                             onOpenWebViewAssist()
                         },
                         shape = CircleShape,
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.VerifiedUser,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("启动 WebView 验证", fontSize = 12.sp)
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "WebView 验证",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
 
                     Button(
@@ -353,9 +376,18 @@ fun SettingsBottomSheet(
                             onDismiss()
                         },
                         shape = CircleShape,
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
                     ) {
-                        Text("保存配置", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "保存配置",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.5.sp,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
             }

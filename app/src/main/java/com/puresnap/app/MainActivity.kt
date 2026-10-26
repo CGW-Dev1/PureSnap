@@ -182,7 +182,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(WindowInsets.navigationBars.asPaddingValues())
-                                .padding(bottom = 16.dp)
+                                .padding(bottom = 10.dp)
                         )
                     }
 

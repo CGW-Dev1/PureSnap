@@ -92,6 +92,29 @@ object DynamicMediaRenderer {
     }
 
     /**
+     * 加载任意远程缩略图或封面图（带内存 LruCache）
+     */
+    suspend fun loadThumbnailBitmap(
+        urlStr: String,
+        platform: PlatformType,
+        maxDimension: Int = 360
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        if (!urlStr.startsWith("http")) return@withContext null
+        val cacheKey = "thumb_${urlStr.hashCode()}_$maxDimension"
+        thumbnailCache.get(cacheKey)?.let { if (!it.isRecycled) return@withContext it }
+
+        val bytes = downloadRemoteBytes(
+            urlStr = urlStr,
+            platform = platform,
+            timeoutMs = 8000
+        ) ?: return@withContext null
+
+        decodeSampledBitmap(bytes, maxDimension)?.also { bmp ->
+            thumbnailCache.put(cacheKey, bmp)
+        }
+    }
+
+    /**
      * 从远程 CDN 下载原始媒体字节流（支持跨 http/https 重定向追踪与备用 URL 自动降级）
      */
     fun downloadRemoteBytes(

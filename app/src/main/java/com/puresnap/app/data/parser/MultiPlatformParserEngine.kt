@@ -152,6 +152,26 @@ object MultiPlatformParserEngine {
             )?.let { return it }
         }
 
+        if (platform == PlatformType.KUAISHOU) {
+            parseKuaishouHtmlState(
+                rawInput = url,
+                cleanUrl = url,
+                finalUrl = url,
+                html = html,
+                workId = workId,
+                previousHistory = null
+            )?.let { return it }
+
+            parseKuaishouRegexSniff(
+                rawInput = url,
+                cleanUrl = url,
+                finalUrl = url,
+                html = html,
+                workId = workId,
+                previousHistory = null
+            )?.let { return it }
+        }
+
         return parseGenericHtmlMetaAndDom(
             rawInput = url,
             cleanUrl = url,
@@ -201,6 +221,13 @@ object MultiPlatformParserEngine {
                     .replace("/watermarked", "/origin")
                     .replace("watermarked", "origin")
                     .substringBefore("?x-oss-process")
+            }
+            PlatformType.KUAISHOU -> {
+                // 快手无损原图直出：剥离客户端截断参数与压缩格式转换，保留原生 4K/超清原图
+                httpsUrl
+                    .replace(Regex("""[?&]bp=\d+"""), "")
+                    .replace(Regex("""[?&]format=webp"""), "")
+                    .replace(Regex("""_webp\b"""), "")
             }
             else -> httpsUrl.substringBefore("?x-oss-process")
         }
@@ -259,6 +286,25 @@ object MultiPlatformParserEngine {
                     html = page.html,
                     workId = workId,
                     preferences = preferences,
+                    previousHistory = previousHistory
+                )
+            }
+
+            PlatformType.KUAISHOU -> {
+                // 快手多级直连解析：状态树 INIT_STATE -> 正则嗅探兜底
+                parseKuaishouHtmlState(
+                    rawInput = rawInput,
+                    cleanUrl = cleanUrl,
+                    finalUrl = page.finalUrl,
+                    html = page.html,
+                    workId = workId,
+                    previousHistory = previousHistory
+                ) ?: parseKuaishouRegexSniff(
+                    rawInput = rawInput,
+                    cleanUrl = cleanUrl,
+                    finalUrl = page.finalUrl,
+                    html = page.html,
+                    workId = workId,
                     previousHistory = previousHistory
                 )
             }
@@ -658,6 +704,331 @@ object MultiPlatformParserEngine {
         }
     }
 
+    private fun parseKuaishouHtmlState(
+        rawInput: String,
+        cleanUrl: String,
+        finalUrl: String,
+        html: String,
+        workId: String,
+        previousHistory: ParseHistoryEntity?
+    ): ParsedPost? {
+        val initStateStr = extractBalancedJsonObject(html, "window.INIT_STATE") ?: return null
+        return parseKuaishouStateJson(
+            rawInput = rawInput,
+            cleanUrl = cleanUrl,
+            finalUrl = finalUrl,
+            stateJsonStr = initStateStr,
+            workId = workId,
+            previousHistory = previousHistory
+        )
+    }
+
+    private fun parseKuaishouStateJson(
+        rawInput: String,
+        cleanUrl: String,
+        finalUrl: String,
+        stateJsonStr: String,
+        workId: String,
+        previousHistory: ParseHistoryEntity?
+    ): ParsedPost? {
+        return try {
+            val root = JsonParser.parseString(stateJsonStr).takeIf { it.isJsonObject }?.asJsonObject ?: return null
+            var targetPhotoObj: JsonObject? = null
+            var targetSingleObj: JsonObject? = null
+            var targetAtlasObj: JsonObject? = null
+
+            fun searchForPhoto(obj: JsonObject) {
+                if (targetPhotoObj != null) return
+                if (obj.has("photo") && obj.get("photo").isJsonObject) {
+                    targetPhotoObj = obj.getAsJsonObject("photo")
+                    targetSingleObj = obj.optObj("single")
+                    targetAtlasObj = obj.optObj("atlas")
+                    return
+                }
+                for (entry in obj.entrySet()) {
+                    val child = entry.value
+                    if (child.isJsonObject) {
+                        searchForPhoto(child.asJsonObject)
+                    }
+                }
+            }
+            searchForPhoto(root)
+
+            val photoObj = targetPhotoObj ?: return null
+            val photoId = photoObj.optStr("photoId").ifBlank { workId }
+            val caption = photoObj.optStr("caption").trim()
+            val authorName = photoObj.optStr("userName").takeIf { it.isNotBlank() } ?: "快手创作者"
+            val authorHandle = photoObj.optStr("userId").takeIf { it.isNotBlank() } ?: photoId.take(8)
+            val authorAvatar = photoObj.optStr("headUrl").replace("http://", "https://")
+            val width = photoObj.optInt("width", 1080).coerceAtLeast(720)
+            val height = photoObj.optInt("height", 1920).coerceAtLeast(960)
+
+            val mediaItems = mutableListOf<MediaItem>()
+
+            // 1. 检查是否为视频（mainMvUrls 或 videoUrl）
+            val mainMvArr = photoObj.optArr("mainMvUrls")
+            val rawVideoUrl = extractFirstUrlFromArray(mainMvArr) ?: photoObj.optStr("videoUrl").takeIf { it.isNotBlank() }
+            if (!rawVideoUrl.isNullOrBlank()) {
+                val losslessVid = rawVideoUrl.replace("http://", "https://")
+                val coverUrl = extractFirstUrlFromArray(photoObj.optArr("coverUrls"))
+                    ?: extractFirstUrlFromArray(photoObj.optArr("webpCoverUrls"))
+                    ?: losslessVid
+                mediaItems.add(
+                    MediaItem(
+                        id = "${photoId}_ks_vid_0",
+                        index = 0,
+                        kind = MediaKind.VIDEO,
+                        badge = QualityBadge.VIDEO_HD,
+                        originUrl = losslessVid,
+                        previewUrl = coverUrl,
+                        liveVideoUrl = losslessVid,
+                        width = width,
+                        height = height,
+                        format = "MP4",
+                        colorSpace = "BT.709",
+                        themeTitle = caption,
+                        visualSeed = 0
+                    )
+                )
+            } else {
+                // 2. 检查多图图集 (atlas)
+                val atlasObj = targetAtlasObj ?: photoObj.optObj("atlas")
+                val atlasList = atlasObj?.optArr("list")
+                val cdnList = atlasObj?.optArr("cdnList") ?: targetSingleObj?.optArr("cdnList")
+                val cdnHost = cdnList?.takeIf { it.size() > 0 }
+                    ?.get(0)?.takeIf { it.isJsonObject }?.asJsonObject?.optStr("cdn")
+
+                if (atlasList != null && atlasList.size() > 0) {
+                    for (i in 0 until atlasList.size()) {
+                        val el = atlasList.get(i)
+                        val path = if (el.isJsonPrimitive) el.asString else continue
+                        val fullUrl = if (path.startsWith("http")) {
+                            path.replace("http://", "https://")
+                        } else if (!cdnHost.isNullOrBlank()) {
+                            "https://$cdnHost/${path.trimStart('/')}"
+                        } else {
+                            "https://p1.a.yximgs.com/${path.trimStart('/')}"
+                        }
+                        val originUrl = rewriteToLosslessOriginUrl(fullUrl, PlatformType.KUAISHOU)
+                        val is4K = width >= 2160 || height >= 2160
+                        mediaItems.add(
+                            MediaItem(
+                                id = "${photoId}_ks_img_$i",
+                                index = i,
+                                kind = MediaKind.IMAGE,
+                                badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
+                                originUrl = originUrl,
+                                previewUrl = fullUrl,
+                                width = width,
+                                height = height,
+                                format = "JPG",
+                                colorSpace = "Display P3",
+                                themeTitle = caption,
+                                visualSeed = i
+                            )
+                        )
+                    }
+                } else {
+                    // 3. 单图作品 (singlePicture 原图直出)
+                    val covers = photoObj.optArr("coverUrls") ?: photoObj.optArr("webpCoverUrls")
+                    val coverCandidate = extractFirstUrlFromArray(covers)
+                    if (!coverCandidate.isNullOrBlank()) {
+                        val originUrl = rewriteToLosslessOriginUrl(coverCandidate, PlatformType.KUAISHOU)
+                        val is4K = width >= 2160 || height >= 2160
+                        mediaItems.add(
+                            MediaItem(
+                                id = "${photoId}_ks_img_0",
+                                index = 0,
+                                kind = MediaKind.IMAGE,
+                                badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
+                                originUrl = originUrl,
+                                previewUrl = coverCandidate,
+                                width = width,
+                                height = height,
+                                format = "JPG",
+                                colorSpace = "Display P3",
+                                themeTitle = caption,
+                                visualSeed = 0
+                            )
+                        )
+                    }
+                }
+            }
+
+            if (mediaItems.isEmpty()) return null
+
+            // 提取背景原声音乐 BGM
+            val singleObj = targetSingleObj
+            val musicPath = singleObj?.optStr("music")?.takeIf { it.isNotBlank() }
+                ?: photoObj.optStr("music").takeIf { it.isNotBlank() }
+            val musicCdn = singleObj?.optArr("musicCdnList")?.takeIf { it.size() > 0 }
+                ?.get(0)?.takeIf { it.isJsonObject }?.asJsonObject?.optStr("cdn")
+
+            val bgmAudio = if (!musicPath.isNullOrBlank()) {
+                val fullMusicUrl = if (musicPath.startsWith("http")) {
+                    musicPath.replace("http://", "https://")
+                } else if (!musicCdn.isNullOrBlank()) {
+                    "https://$musicCdn/${musicPath.trimStart('/')}"
+                } else null
+
+                fullMusicUrl?.let {
+                    AudioTrackInfo(
+                        id = "${photoId}_ks_bgm",
+                        title = "快手原声音乐",
+                        author = authorName,
+                        url = it,
+                        format = if (it.contains(".m4a")) "M4A" else "MP3"
+                    )
+                }
+            } else null
+
+            val tags = extractHashtags(caption, null)
+
+            ParsedPost(
+                id = "post_$photoId",
+                sourceShareText = rawInput,
+                extractedUrl = cleanUrl,
+                noteId = photoId,
+                platform = PlatformType.KUAISHOU,
+                postTypeLabel = if (mediaItems.any { it.isVideo }) "快手·视频" else "快手·图集",
+                authorName = authorName,
+                authorHandle = "@$authorHandle",
+                authorAvatarUrl = authorAvatar,
+                coverUrl = mediaItems.first().previewUrl,
+                title = caption.take(40).ifBlank { "快手作品分享" },
+                content = caption,
+                tags = tags,
+                mediaItems = mediaItems,
+                bgmAudio = bgmAudio,
+                parseEngineSource = "快手原画直连",
+                isDuplicateDownload = previousHistory?.downloadedOnce == true,
+                previousDownloadTimeMillis = previousHistory?.parsedAtMillis
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun parseKuaishouRegexSniff(
+        rawInput: String,
+        cleanUrl: String,
+        finalUrl: String,
+        html: String,
+        workId: String,
+        previousHistory: ParseHistoryEntity?
+    ): ParsedPost? {
+        if (html.isBlank()) return null
+        return try {
+            val captionPattern = Pattern.compile(""""caption"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+            val captionMatcher = captionPattern.matcher(html)
+            val caption = if (captionMatcher.find()) decodeJsonString(captionMatcher.group(1) ?: "") else ""
+
+            val userPattern = Pattern.compile(""""userName"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+            val userMatcher = userPattern.matcher(html)
+            val userName = if (userMatcher.find()) decodeJsonString(userMatcher.group(1) ?: "") else "快手创作者"
+
+            val headPattern = Pattern.compile(""""headUrl"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+            val headMatcher = headPattern.matcher(html)
+            val headUrl = if (headMatcher.find()) decodeJsonString(headMatcher.group(1) ?: "").replace("http://", "https://") else ""
+
+            val wPattern = Pattern.compile(""""width"\s*:\s*(\d+)""").matcher(html)
+            val width = if (wPattern.find()) wPattern.group(1)?.toIntOrNull() ?: 1080 else 1080
+            val hPattern = Pattern.compile(""""height"\s*:\s*(\d+)""").matcher(html)
+            val height = if (hPattern.find()) hPattern.group(1)?.toIntOrNull() ?: 1920 else 1920
+
+            val mediaItems = mutableListOf<MediaItem>()
+
+            val mvPattern = Pattern.compile(""""mainMvUrls"\s*:\s*\[\s*\{.*?"url"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+            val mvMatcher = mvPattern.matcher(html)
+            if (mvMatcher.find()) {
+                val vidUrl = decodeJsonString(mvMatcher.group(1) ?: "").replace("http://", "https://")
+                mediaItems.add(
+                    MediaItem(
+                        id = "${workId}_ks_vid_0",
+                        index = 0,
+                        kind = MediaKind.VIDEO,
+                        badge = QualityBadge.VIDEO_HD,
+                        originUrl = vidUrl,
+                        previewUrl = vidUrl,
+                        liveVideoUrl = vidUrl,
+                        width = width,
+                        height = height,
+                        format = "MP4",
+                        colorSpace = "BT.709",
+                        themeTitle = caption,
+                        visualSeed = 0
+                    )
+                )
+            } else {
+                val imgPattern = Pattern.compile("""https?:\\/\\/[^"'\s]+\.(?:yximgs|kwimgs|kwaicdn)\.com\\/[^"'\s]+""")
+                val imgMatcher = imgPattern.matcher(html)
+                val foundImages = linkedSetOf<String>()
+                while (imgMatcher.find()) {
+                    val rawU = decodeJsonString(imgMatcher.group(0) ?: "").replace("http://", "https://")
+                    if (!rawU.contains("avatar") && !rawU.contains("head") && !rawU.contains("icon") && !rawU.endsWith(".js") && !rawU.endsWith(".css")) {
+                        foundImages.add(rawU)
+                    }
+                }
+                foundImages.take(20).forEachIndexed { idx, u ->
+                    val lossless = rewriteToLosslessOriginUrl(u, PlatformType.KUAISHOU)
+                    val is4K = width >= 2160 || height >= 2160
+                    mediaItems.add(
+                        MediaItem(
+                            id = "${workId}_ks_img_$idx",
+                            index = idx,
+                            kind = MediaKind.IMAGE,
+                            badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
+                            originUrl = lossless,
+                            previewUrl = u,
+                            width = width,
+                            height = height,
+                            format = "JPG",
+                            colorSpace = "Display P3",
+                            themeTitle = caption,
+                            visualSeed = idx
+                        )
+                    )
+                }
+            }
+
+            if (mediaItems.isEmpty()) return null
+
+            return ParsedPost(
+                id = "post_$workId",
+                sourceShareText = rawInput,
+                extractedUrl = cleanUrl,
+                noteId = workId,
+                platform = PlatformType.KUAISHOU,
+                postTypeLabel = if (mediaItems.any { it.isVideo }) "快手·视频" else "快手·图集",
+                authorName = userName,
+                authorHandle = "@${workId.take(8)}",
+                authorAvatarUrl = headUrl,
+                coverUrl = mediaItems.first().previewUrl,
+                title = caption.take(40).ifBlank { "快手作品分享" },
+                content = caption,
+                tags = extractHashtags(caption, null),
+                mediaItems = mediaItems,
+                bgmAudio = null,
+                parseEngineSource = "快手正则兜底",
+                isDuplicateDownload = previousHistory?.downloadedOnce == true,
+                previousDownloadTimeMillis = previousHistory?.parsedAtMillis
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun decodeJsonString(input: String): String {
+        return input
+            .replace("\\/", "/")
+            .replace("\\\"", "\"")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+            .replace("\\u002F", "/")
+            .replace("\\u0026", "&")
+    }
+
     private fun parseFromWebSniffResult(
         rawInput: String,
         cleanUrl: String,
@@ -723,6 +1094,36 @@ object MultiPlatformParserEngine {
             )?.let { return it }
         }
 
+        if (platform == PlatformType.KUAISHOU) {
+            val stateCandidate = sniff.initialStateJson ?: sniff.stateScriptText
+            if (stateCandidate.isNotBlank()) {
+                parseKuaishouStateJson(
+                    rawInput = rawInput,
+                    cleanUrl = cleanUrl,
+                    finalUrl = sniff.finalUrl,
+                    stateJsonStr = stateCandidate,
+                    workId = workId,
+                    previousHistory = previousHistory
+                )?.let { return it }
+            }
+            parseKuaishouHtmlState(
+                rawInput = rawInput,
+                cleanUrl = cleanUrl,
+                finalUrl = sniff.finalUrl,
+                html = sniff.rawHtml,
+                workId = workId,
+                previousHistory = previousHistory
+            )?.let { return it }
+            parseKuaishouRegexSniff(
+                rawInput = rawInput,
+                cleanUrl = cleanUrl,
+                finalUrl = sniff.finalUrl,
+                html = sniff.rawHtml,
+                workId = workId,
+                previousHistory = previousHistory
+            )?.let { return it }
+        }
+
         val mediaItems = mutableListOf<MediaItem>()
 
         val videoCandidates = linkedSetOf<String>().apply {
@@ -737,7 +1138,8 @@ object MultiPlatformParserEngine {
             sniff.ogImages.filter { it.startsWith("http") }.forEach { add(it) }
             sniff.domImages.filter { it.startsWith("http") }.forEach { add(it) }
             sniff.sniffedMediaUrls.filter {
-                (it.contains("xhscdn.com") || it.contains("douyinpic.com") || it.contains("izuiyou.com")) &&
+                (it.contains("xhscdn.com") || it.contains("douyinpic.com") || it.contains("izuiyou.com") ||
+                    it.contains("yximgs.com") || it.contains("kwimgs.com") || it.contains("kwaicdn.com")) &&
                     !it.endsWith(".mp4")
             }.forEach { add(it) }
         }
@@ -1156,9 +1558,19 @@ object MultiPlatformParserEngine {
         if (arr == null || arr.size() == 0) return null
         for (i in 0 until arr.size()) {
             val el = arr.get(i)
-            val u = if (el.isJsonPrimitive) {
-                el.asString.replace("\\u002F", "/").replace("http://", "https://")
-            } else ""
+            val u = when {
+                el.isJsonPrimitive -> el.asString.replace("\\u002F", "/").replace("http://", "https://")
+                el.isJsonObject -> {
+                    val obj = el.asJsonObject
+                    (obj.optStr("url").takeIf { it.isNotBlank() }
+                        ?: obj.optStr("play_url").takeIf { it.isNotBlank() }
+                        ?: obj.optStr("src").takeIf { it.isNotBlank() }
+                        ?: "")
+                        .replace("\\u002F", "/")
+                        .replace("http://", "https://")
+                }
+                else -> ""
+            }
             if (u.startsWith("http")) {
                 return u
             }

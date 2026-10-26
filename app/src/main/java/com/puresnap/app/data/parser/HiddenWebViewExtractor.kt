@@ -84,13 +84,17 @@ object HiddenWebViewExtractor {
                         var target = (st.noteData && st.noteData.data) ? st.noteData : (st.note ? st.note : st);
                         initStr = JSON.stringify(target);
                     } catch(e) {}
+                } else if (window.INIT_STATE) {
+                    try {
+                        initStr = JSON.stringify(window.INIT_STATE);
+                    } catch(e) {}
                 }
 
                 var scriptDump = '';
                 var scripts = document.querySelectorAll('script');
                 for (var i = 0; i < scripts.length; i++) {
                     var txt = scripts[i].textContent || '';
-                    if (txt.indexOf('_ROUTER_DATA') !== -1 || txt.indexOf('__INITIAL_STATE__') !== -1 || txt.indexOf('imageList') !== -1 || txt.indexOf('item_list') !== -1) {
+                    if (txt.indexOf('_ROUTER_DATA') !== -1 || txt.indexOf('__INITIAL_STATE__') !== -1 || txt.indexOf('INIT_STATE') !== -1 || txt.indexOf('imageList') !== -1 || txt.indexOf('item_list') !== -1 || txt.indexOf('coverUrls') !== -1) {
                         scriptDump += txt + '\n';
                     }
                 }
@@ -175,7 +179,8 @@ object HiddenWebViewExtractor {
                             val hasValidMediaState = parsed != null && (
                                 (parsed.routerDataJson?.contains("item_list") == true) ||
                                     (parsed.initialStateJson?.contains("imageList") == true) ||
-                                    (parsed.stateScriptText.contains("item_list") || parsed.stateScriptText.contains("imageList")) ||
+                                    (parsed.initialStateJson?.contains("photo") == true) ||
+                                    (parsed.stateScriptText.contains("item_list") || parsed.stateScriptText.contains("imageList") || parsed.stateScriptText.contains("photo") || parsed.stateScriptText.contains("coverUrls")) ||
                                     parsed.ogImages.isNotEmpty() ||
                                     parsed.ogVideo.isNotBlank() ||
                                     parsed.domVideos.isNotEmpty() ||
@@ -214,6 +219,9 @@ object HiddenWebViewExtractor {
                                 lower.contains("douyinpic.com") ||
                                 lower.contains("izuiyou.com/img") ||
                                 lower.contains("kwaicdn.com") ||
+                                lower.contains("yximgs.com") ||
+                                lower.contains("kwimgs.com") ||
+                                lower.contains("chenzhongtech.com") ||
                                 lower.endsWith(".mp4")
                             ) {
                                 if (!lower.contains("avatar") && !lower.contains("icon") && !lower.contains(".js") && !lower.contains(".css")) {
