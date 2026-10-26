@@ -43,31 +43,6 @@ enum class ExportFormatMode(
 }
 
 /**
- * 小红书/抖音实况图（Live Photo）导出模式
- */
-enum class LivePhotoExportMode(
-    val title: String,
-    val subtitle: String
-) {
-    MOTION_PHOTO_JPEG(
-        title = "保存为原生实况照片（推荐·相册长按播放）",
-        subtitle = "合成符合安卓系统相册规范的标准实况照片（.MP.jpg），小米/OPPO/vivo/三星/Pixel 等系统相册直接原生识别并支持长按动效播放"
-    ),
-    BOTH_IMAGE_AND_MP4(
-        title = "双模分别导出（原图 + 独立 MP4 视频）",
-        subtitle = "同时分别保存静态高清原图与独立高清动态视频 (.mp4)"
-    ),
-    STATIC_IMAGE_ONLY(
-        title = "仅保存静态高清原图",
-        subtitle = "仅导出无水印最高分辨率静态帧原图"
-    ),
-    LIVE_VIDEO_ONLY(
-        title = "仅导出动态短视频 (MP4)",
-        subtitle = "仅将实况动态流导出为独立高清 MP4 视频"
-    )
-}
-
-/**
  * 异常与边缘场景状态码（第五章规范）
  */
 enum class ParseErrorType(

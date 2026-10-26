@@ -3,7 +3,6 @@ package com.puresnap.app.data.preferences
 import android.content.Context
 import android.content.SharedPreferences
 import com.puresnap.app.model.ExportFormatMode
-import com.puresnap.app.model.LivePhotoExportMode
 import com.puresnap.app.model.PlatformType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,7 +12,6 @@ data class UserPreferencesState(
     val disclaimerAccepted: Boolean = false,
     val smartClipboardEnabled: Boolean = true,
     val exportFormatMode: ExportFormatMode = ExportFormatMode.COMPATIBLE_JPEG_100,
-    val livePhotoExportMode: LivePhotoExportMode = LivePhotoExportMode.MOTION_PHOTO_JPEG,
     val modifyMd5Enabled: Boolean = false,
     val duplicateReminderEnabled: Boolean = true,
     val dynamicColorEnabled: Boolean = false,
@@ -46,16 +44,12 @@ class AppPreferencesRepository(context: Context) {
     private fun loadState(): UserPreferencesState {
         val formatName = prefs.getString("export_format_mode", ExportFormatMode.COMPATIBLE_JPEG_100.name)
             ?: ExportFormatMode.COMPATIBLE_JPEG_100.name
-        val liveModeName = prefs.getString("live_photo_export_mode", LivePhotoExportMode.MOTION_PHOTO_JPEG.name)
-            ?: LivePhotoExportMode.MOTION_PHOTO_JPEG.name
 
         return UserPreferencesState(
             disclaimerAccepted = prefs.getBoolean("disclaimer_accepted", false),
             smartClipboardEnabled = prefs.getBoolean("smart_clipboard_enabled", true),
             exportFormatMode = runCatching { ExportFormatMode.valueOf(formatName) }
                 .getOrDefault(ExportFormatMode.COMPATIBLE_JPEG_100),
-            livePhotoExportMode = runCatching { LivePhotoExportMode.valueOf(liveModeName) }
-                .getOrDefault(LivePhotoExportMode.MOTION_PHOTO_JPEG),
             modifyMd5Enabled = prefs.getBoolean("modify_md5_enabled", false),
             duplicateReminderEnabled = prefs.getBoolean("duplicate_reminder_enabled", true),
             dynamicColorEnabled = prefs.getBoolean("dynamic_color_v2", false),
@@ -83,11 +77,6 @@ class AppPreferencesRepository(context: Context) {
     fun setExportFormatMode(mode: ExportFormatMode) {
         prefs.edit().putString("export_format_mode", mode.name).apply()
         _state.value = _state.value.copy(exportFormatMode = mode)
-    }
-
-    fun setLivePhotoExportMode(mode: LivePhotoExportMode) {
-        prefs.edit().putString("live_photo_export_mode", mode.name).apply()
-        _state.value = _state.value.copy(livePhotoExportMode = mode)
     }
 
     fun setModifyMd5Enabled(enabled: Boolean) {

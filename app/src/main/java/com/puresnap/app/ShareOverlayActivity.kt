@@ -259,10 +259,7 @@ class ShareOverlayActivity : ComponentActivity() {
                                     items = post.mediaItems.take(9),
                                     platform = post.platform,
                                     onToggleSelect = viewModel::toggleItemSelection,
-                                    onDragSetSelect = viewModel::setItemSelection,
-                                    onExportSingleLivePhoto = { item, mode ->
-                                        viewModel.exportSingleLivePhotoItem(context, item, mode)
-                                    }
+                                    onDragSetSelect = viewModel::setItemSelection
                                 )
 
                                 HorizontalDivider(

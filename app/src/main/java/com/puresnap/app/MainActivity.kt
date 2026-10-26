@@ -152,9 +152,6 @@ class MainActivity : ComponentActivity() {
                                 onDownloadSelected = {
                                     viewModel.downloadSelectedMedia(context)
                                 },
-                                onExportSingleLivePhoto = { item, mode ->
-                                    viewModel.exportSingleLivePhotoItem(context, item, mode)
-                                },
                                 onSaveBgm = { viewModel.saveBgmAudio(context) },
                                 onSaveCompanionImage = { isAvatar ->
                                     viewModel.saveCompanionImage(context, isAvatar)

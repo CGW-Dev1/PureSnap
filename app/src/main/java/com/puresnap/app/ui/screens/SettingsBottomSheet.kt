@@ -57,7 +57,6 @@ import androidx.compose.ui.unit.sp
 import com.puresnap.app.data.preferences.AppPreferencesRepository
 import com.puresnap.app.data.preferences.UserPreferencesState
 import com.puresnap.app.model.ExportFormatMode
-import com.puresnap.app.model.LivePhotoExportMode
 
 /**
  * 全局设置与高阶反爬配置抽屉
@@ -158,43 +157,7 @@ fun SettingsBottomSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 2. 实况照片 (Live Photo) 导出设置
-            SectionCard(
-                icon = Icons.Default.MotionPhotosOn,
-                title = "实况照片 (Live Photo) 默认导出方式"
-            ) {
-                LivePhotoExportMode.entries.forEach { mode ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { prefsRepo.setLivePhotoExportMode(mode) }
-                            .padding(vertical = 5.dp)
-                    ) {
-                        RadioButton(
-                            selected = preferences.livePhotoExportMode == mode,
-                            onClick = { prefsRepo.setLivePhotoExportMode(mode) }
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Column {
-                            Text(
-                                text = mode.title,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.5.sp
-                            )
-                            Text(
-                                text = mode.subtitle,
-                                fontSize = 11.5.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 3. 灵动交互与二创 MD5 修改去重 (P0 & P2)
+            // 2. 灵动交互与二创 MD5 修改去重 (P0 & P2)
             SectionCard(
                 icon = Icons.Default.Fingerprint,
                 title = "智能感知与 MD5 二创去重（P2）"

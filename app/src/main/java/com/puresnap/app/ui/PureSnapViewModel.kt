@@ -12,7 +12,6 @@ import com.puresnap.app.data.local.DownloadedMediaEntity
 import com.puresnap.app.data.local.ParseHistoryEntity
 import com.puresnap.app.data.parser.MultiPlatformParserEngine
 import com.puresnap.app.data.preferences.UserPreferencesState
-import com.puresnap.app.model.LivePhotoExportMode
 import com.puresnap.app.model.MediaItem
 import com.puresnap.app.model.ParseErrorType
 import com.puresnap.app.model.ParsedPost
@@ -323,7 +322,6 @@ class PureSnapViewModel(application: Application) : AndroidViewModel(application
                 post = post,
                 itemsToSave = selected,
                 exportFormatMode = prefs.exportFormatMode,
-                livePhotoExportMode = prefs.livePhotoExportMode,
                 modifyMd5 = prefs.modifyMd5Enabled,
                 customCookie = prefs.cookieForPlatform(post.platform),
                 onProgress = { done, total ->
@@ -347,39 +345,6 @@ class PureSnapViewModel(application: Application) : AndroidViewModel(application
             } else {
                 _downloadState.value = MorphDownloadState.Idle
                 Toast.makeText(context, "原片下载失败，请检查网络或尝试 WebView 辅助提取", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    fun exportSingleLivePhotoItem(
-        context: Context,
-        item: MediaItem,
-        mode: LivePhotoExportMode
-    ) {
-        val post = _currentPost.value ?: return
-        viewModelScope.launch {
-            val prefs = preferences.value
-            val result = MediaStoreArchiver.saveSelectedMediaBatch(
-                context = context,
-                post = post,
-                itemsToSave = listOf(item),
-                exportFormatMode = prefs.exportFormatMode,
-                livePhotoExportMode = mode,
-                modifyMd5 = prefs.modifyMd5Enabled,
-                customCookie = prefs.cookieForPlatform(post.platform),
-                onProgress = { _, _ -> }
-            )
-            if (result.savedEntities.isNotEmpty()) {
-                dao.insertDownloadedMedia(result.savedEntities)
-                val desc = when (mode) {
-                    LivePhotoExportMode.MOTION_PHOTO_JPEG -> "已保存原生实况照片至系统相册（长按播放动效）"
-                    LivePhotoExportMode.STATIC_IMAGE_ONLY -> "已保存静态高清原图至相册"
-                    LivePhotoExportMode.LIVE_VIDEO_ONLY -> "已导出实况动态视频 (MP4) 至相册"
-                    LivePhotoExportMode.BOTH_IMAGE_AND_MP4 -> "已分别导出静态原图与动态 MP4 至相册"
-                }
-                Toast.makeText(context, desc, Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "导出失败，请稍后重试", Toast.LENGTH_SHORT).show()
             }
         }
     }

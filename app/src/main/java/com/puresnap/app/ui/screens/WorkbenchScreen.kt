@@ -87,7 +87,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.puresnap.app.data.preferences.UserPreferencesState
-import com.puresnap.app.model.LivePhotoExportMode
 import com.puresnap.app.model.MediaItem
 import com.puresnap.app.model.ParseErrorType
 import com.puresnap.app.model.ParsedPost
@@ -128,7 +127,6 @@ fun WorkbenchScreen(
     onToggleSelectAll: () -> Unit,
     onInvertSelection: () -> Unit,
     onDownloadSelected: () -> Unit,
-    onExportSingleLivePhoto: (MediaItem, LivePhotoExportMode) -> Unit,
     onSaveBgm: () -> Unit,
     onSaveCompanionImage: (isAvatar: Boolean) -> Unit,
     onCopyText: (label: String, content: String) -> Unit,
@@ -600,7 +598,6 @@ fun WorkbenchScreen(
                     onToggleSelectAll = onToggleSelectAll,
                     onInvertSelection = onInvertSelection,
                     onDownloadSelected = onDownloadSelected,
-                    onExportSingleLivePhoto = onExportSingleLivePhoto,
                     onSaveBgm = onSaveBgm,
                     onSaveCompanionImage = onSaveCompanionImage,
                     onCopyText = onCopyText,
@@ -791,7 +788,6 @@ private fun ParsedResultCard(
     onToggleSelectAll: () -> Unit,
     onInvertSelection: () -> Unit,
     onDownloadSelected: () -> Unit,
-    onExportSingleLivePhoto: (MediaItem, LivePhotoExportMode) -> Unit,
     onSaveBgm: () -> Unit,
     onSaveCompanionImage: (isAvatar: Boolean) -> Unit,
     onCopyText: (label: String, content: String) -> Unit,
@@ -1116,8 +1112,7 @@ private fun ParsedResultCard(
                 items = post.mediaItems,
                 platform = post.platform,
                 onToggleSelect = onToggleSelectItem,
-                onDragSetSelect = onDragSelectItem,
-                onExportSingleLivePhoto = onExportSingleLivePhoto
+                onDragSetSelect = onDragSelectItem
             )
 
             Spacer(modifier = Modifier.height(14.dp))

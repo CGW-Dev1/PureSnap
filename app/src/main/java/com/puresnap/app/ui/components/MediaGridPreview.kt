@@ -80,7 +80,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,14 +88,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.puresnap.app.model.LivePhotoExportMode
 import com.puresnap.app.model.MediaItem
 import com.puresnap.app.model.PlatformType
 import com.puresnap.app.model.QualityBadge
 import com.puresnap.app.util.DynamicMediaRenderer
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * 自适应圆角网格预览组件（P0）
@@ -111,14 +106,12 @@ fun MediaGridPreview(
     platform: PlatformType,
     onToggleSelect: (Int) -> Unit,
     onDragSetSelect: (Int, Boolean) -> Unit,
-    onExportSingleLivePhoto: (MediaItem, LivePhotoExportMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
     val cellBoundsMap = remember { mutableStateMapOf<Int, Rect>() }
     var dragTargetSelectedState by remember { mutableStateOf(true) }
     var previewingItem by remember { mutableStateOf<MediaItem?>(null) }
-    var liveModalItem by remember { mutableStateOf<MediaItem?>(null) }
 
     val columns = when (items.size) {
         1 -> 1
@@ -180,19 +173,10 @@ fun MediaGridPreview(
                             onToggleSelect(item.index)
                         },
                         onClickPreview = {
-                            if (item.isLivePhoto && !item.liveVideoUrl.isNullOrBlank()) {
-                                liveModalItem = item
-                            } else {
-                                previewingItem = item
-                            }
+                            previewingItem = item
                         },
                         onLongPressLive = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (item.isLivePhoto) {
-                                liveModalItem = item
-                            } else {
-                                previewingItem = item
-                            }
+                            previewingItem = item
                         },
                         modifier = Modifier
                             .weight(1f)
@@ -216,26 +200,6 @@ fun MediaGridPreview(
             platform = platform,
             onDismiss = { previewingItem = null },
             onToggleSelect = { onToggleSelect(item.index) }
-        )
-    }
-
-    liveModalItem?.let { item ->
-        LivePhotoDualExportDialog(
-            item = item,
-            platform = platform,
-            onDismiss = { liveModalItem = null },
-            onExportMotionPhoto = {
-                onExportSingleLivePhoto(item, LivePhotoExportMode.MOTION_PHOTO_JPEG)
-                liveModalItem = null
-            },
-            onExportBothImageAndMp4 = {
-                onExportSingleLivePhoto(item, LivePhotoExportMode.BOTH_IMAGE_AND_MP4)
-                liveModalItem = null
-            },
-            onExportStaticOnly = {
-                onExportSingleLivePhoto(item, LivePhotoExportMode.STATIC_IMAGE_ONLY)
-                liveModalItem = null
-            }
         )
     }
 }
@@ -667,249 +631,3 @@ private fun ZoomableMediaPreviewDialog(
     }
 }
 
-@Composable
-private fun LivePhotoDualExportDialog(
-    item: MediaItem,
-    platform: PlatformType,
-    onDismiss: () -> Unit,
-    onExportMotionPhoto: () -> Unit,
-    onExportBothImageAndMp4: () -> Unit,
-    onExportStaticOnly: () -> Unit
-) {
-    val context = LocalContext.current
-    var previewBmp by remember(item.id) { mutableStateOf<Bitmap?>(null) }
-    var cachedVideoFile by remember(item.id, item.liveVideoUrl) { mutableStateOf<File?>(null) }
-    var isBufferingVideo by remember(item.id, item.liveVideoUrl) {
-        mutableStateOf(!item.liveVideoUrl.isNullOrBlank())
-    }
-
-    LaunchedEffect(item.id) {
-        previewBmp = DynamicMediaRenderer.loadPreviewBitmap(
-            item = item,
-            platform = platform,
-            maxDimension = 1080
-        )
-    }
-
-    LaunchedEffect(item.id, item.liveVideoUrl) {
-        val videoUrl = item.liveVideoUrl
-        if (videoUrl.isNullOrBlank() || !videoUrl.startsWith("http")) {
-            isBufferingVideo = false
-            return@LaunchedEffect
-        }
-        withContext(Dispatchers.IO) {
-            try {
-                val cacheKey = "live_cache_${item.id.hashCode()}_${videoUrl.hashCode() % 10000}.mp4"
-                val tempFile = File(context.cacheDir, cacheKey)
-                if (tempFile.exists() && tempFile.length() > 2048) {
-                    cachedVideoFile = tempFile
-                    isBufferingVideo = false
-                } else {
-                    val bytes = DynamicMediaRenderer.downloadRemoteBytes(
-                        urlStr = videoUrl,
-                        platform = platform,
-                        timeoutMs = 25_000
-                    )
-                    if (bytes != null && bytes.size > 2048) {
-                        tempFile.writeBytes(bytes)
-                        cachedVideoFile = tempFile
-                    }
-                    isBufferingVideo = false
-                }
-            } catch (_: Exception) {
-                isBufferingVideo = false
-            }
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(18.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Surface(
-                        color = Color(0xFFE11D48),
-                        shape = CircleShape
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.MotionPhotosOn,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "LIVE 实况照片",
-                                color = Color.White,
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "关闭"
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(0.85f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.Black)
-                ) {
-                    // 1. 底层静止原图
-                    previewBmp?.let { bmp ->
-                        Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = "实况静态预览",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    // 2. 本地缓存视频循环播放（杜绝原生 MediaPlayer 网络 302 / CDN 跨域鉴权引发“无法播放此视频。”弹窗）
-                    if (cachedVideoFile != null) {
-                        AndroidView(
-                            factory = { ctx ->
-                                VideoView(ctx).apply {
-                                    setVideoPath(cachedVideoFile!!.absolutePath)
-                                    setOnPreparedListener { mp ->
-                                        mp.isLooping = true
-                                        mp.setVolume(0f, 0f)
-                                        start()
-                                    }
-                                    setOnErrorListener { _, _, _ ->
-                                        // 拦截并彻底屏蔽系统默认“无法播放此视频。”弹窗
-                                        true
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    // 3. 动态流加载指示器
-                    if (isBufferingVideo) {
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.60f),
-                            shape = CircleShape,
-                            modifier = Modifier.align(Alignment.Center)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "实况动效载入中...",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // 主选项：保存为安卓标准原生实况照片
-                Button(
-                    onClick = onExportMotionPhoto,
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFE11D48)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MotionPhotosOn,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "保存为原生实况照片（相册长按播放）",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.5.sp
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 次选项：分别保存静态原图与独立视频
-                OutlinedButton(
-                    onClick = onExportBothImageAndMp4,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(42.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Layers,
-                        contentDescription = null,
-                        modifier = Modifier.size(17.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "分别保存原图与独立视频 (MP4)",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // 辅助选项：仅保存静态高清原图
-                TextButton(
-                    onClick = onExportStaticOnly,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(38.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PhotoLibrary,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "仅保存静态高清原图 (${item.resolutionLabel})",
-                        fontSize = 12.5.sp
-                    )
-                }
-            }
-        }
-    }
-}
