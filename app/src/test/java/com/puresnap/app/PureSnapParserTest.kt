@@ -182,4 +182,31 @@ class PureSnapParserTest {
         assertFalse(item.liveVideoUrl!!.contains("playwm"))
         assertEquals("https://p3.douyinpic.com/sunset_display.jpeg", item.originUrl)
     }
+
+    @Test
+    fun testDouyinRealLivePhotoAwemeDetailRootVideoExtraction() {
+        // 抖音真实实况图文结构：is_live_photo=true，图片在 images 列表中，动态视频在根级 video.play_addr
+        val sampleHtml = """
+            <html><body><script>
+            window._ROUTER_DATA = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[{"aweme_id":"7700131720217898162","desc":">﹏<# 中华风lolita 实况图","is_live_photo":true,"author":{"nickname":"许知意","unique_id":"xuzhiyi","avatar_larger":{"url_list":["https://p3.douyinpic.com/avatar_xzy.jpeg"]}},"images":[{"display_image":{"url_list":["https://p3.douyinpic.com/photo1.jpeg"]},"width":1080,"height":1440},{"display_image":{"url_list":["https://p3.douyinpic.com/photo2.jpeg"]},"width":1080,"height":1440}],"video":{"play_addr":{"url_list":["https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v0200xuzhiyi_live&line=0"]}}}]}}}};
+            </script></body></html>
+        """.trimIndent()
+
+        val post = MultiPlatformParserEngine.parseFromWebViewHtml(
+            url = "https://www.iesdouyin.com/share/video/7700131720217898162/",
+            html = sampleHtml,
+            preferences = UserPreferencesState()
+        )
+        assertNotNull(post)
+        assertEquals("抖音·实况图", post!!.postTypeLabel)
+        assertEquals("许知意", post.authorName)
+        assertEquals(2, post.mediaItems.size)
+
+        for (item in post.mediaItems) {
+            assertTrue("Every item in live photo post must be LIVE_PHOTO", item.isLivePhoto)
+            assertNotNull(item.liveVideoUrl)
+            assertTrue(item.liveVideoUrl!!.contains("/play/"))
+            assertFalse(item.liveVideoUrl!!.contains("playwm"))
+        }
+    }
 }

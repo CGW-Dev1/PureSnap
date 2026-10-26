@@ -380,6 +380,22 @@ object MultiPlatformParserEngine {
                 ?: itemObj.optArr("image_list")
                 ?: itemObj.optObj("image_album")?.optArr("images")
 
+            val rootVideoObj = itemObj.optObj("video")
+            val rootLiveVideoUrl = rootVideoObj?.optObj("play_addr")?.let { playAddr ->
+                extractFirstUrlFromArray(playAddr.optArr("url_list"))
+                    ?: extractFirstUrlFromArray(rootVideoObj.optArr("play_addr_h264"))
+            }?.let { rewriteToLosslessOriginUrl(it, PlatformType.DOUYIN) }
+                ?: rootVideoObj?.optStr("uri")?.takeIf { it.isNotBlank() }?.let {
+                    "https://aweme.snssdk.com/aweme/v1/play/?video_id=$it&ratio=1080p&line=0"
+                }
+
+            val descLower = desc.lowercase()
+            val isPostLivePhoto = itemObj.optBool("is_live_photo", false) ||
+                itemObj.optBool("is_live", false) ||
+                itemObj.optStr("aweme_type") in listOf("2", "68", "150") ||
+                itemObj.optObj("live_photo") != null ||
+                (descLower.contains("实况") || descLower.contains("livephoto") || descLower.contains("live photo"))
+
             if (imagesArr != null && imagesArr.size() > 0) {
                 for (i in 0 until imagesArr.size()) {
                     val imgObj = imagesArr.get(i).takeIf { it.isJsonObject }?.asJsonObject ?: continue
@@ -417,8 +433,10 @@ object MultiPlatformParserEngine {
                         ?: imgObj.optObj("origin_image")?.optInt("height", 0)?.takeIf { it > 0 }
                         ?: 1440
 
-                    val liveVideoUrl = extractDouyinLivePhotoVideo(imgObj)
-                    val isLive = isDouyinLivePhoto(imgObj) || !liveVideoUrl.isNullOrBlank()
+                    val perImageVideoUrl = extractDouyinLivePhotoVideo(imgObj)
+                    val effectiveLiveVideoUrl = perImageVideoUrl ?: rootLiveVideoUrl
+                    val isLive = isPostLivePhoto || isDouyinLivePhoto(imgObj) || !effectiveLiveVideoUrl.isNullOrBlank()
+                    val itemVideoUrl = if (isLive) effectiveLiveVideoUrl else null
                     val is4K = w >= 2160 || h >= 2160
                     val fmt = if (bestOriginUrl.lowercase().contains(".webp")) "WEBP" else "JPG"
 
@@ -434,7 +452,7 @@ object MultiPlatformParserEngine {
                             },
                             originUrl = bestOriginUrl,
                             previewUrl = previewUrl,
-                            liveVideoUrl = liveVideoUrl,
+                            liveVideoUrl = itemVideoUrl,
                             width = w,
                             height = h,
                             format = fmt,
@@ -1079,6 +1097,15 @@ object MultiPlatformParserEngine {
                 previousHistory = previousHistory
             )?.let { return it }
         }
+        if (!sniff.apiResponseJson.isNullOrBlank()) {
+            parseDouyinRouterJson(
+                rawInput = rawInput,
+                cleanUrl = cleanUrl,
+                routerJsonStr = sniff.apiResponseJson,
+                fallbackWorkId = workId,
+                previousHistory = previousHistory
+            )?.let { return it }
+        }
         if (!sniff.renderDataEncoded.isNullOrBlank()) {
             val decoded = runCatching { URLDecoder.decode(sniff.renderDataEncoded, "UTF-8") }.getOrNull()
             if (!decoded.isNullOrBlank()) {
@@ -1161,7 +1188,10 @@ object MultiPlatformParserEngine {
             if (sniff.ogVideo.startsWith("http")) add(sniff.ogVideo)
             sniff.domVideos.filter { it.startsWith("http") }.forEach { add(it) }
             sniff.sniffedMediaUrls.filter {
-                it.contains("aweme/v1/play") || it.contains("douyinvod") || it.contains("sns-video") || it.contains("xhscdn.com/stream") || it.endsWith(".mp4")
+                (it.contains("aweme/v1/play") || it.contains("douyinvod") || it.contains("bytevcloud") ||
+                    (it.contains("snssdk.com") && it.contains("play")) || it.contains("sns-video") ||
+                    it.contains("xhscdn.com/stream") || it.endsWith(".mp4")) &&
+                    !it.contains("/music/") && !it.endsWith(".mp3") && !it.endsWith(".m4a")
             }.forEach { add(it) }
         }
 
@@ -1176,8 +1206,39 @@ object MultiPlatformParserEngine {
         }
 
         val firstCover = imageCandidates.firstOrNull()?.replace("http://", "https://") ?: ""
+        val targetImages = if (sniff.ogImages.isNotEmpty()) sniff.ogImages else imageCandidates.toList()
+        val hasMultipleImages = targetImages.size > 1
+        val hasVideo = videoCandidates.isNotEmpty()
+        val titleOrDesc = (sniff.ogTitle + " " + sniff.title + " " + sniff.ogDesc + " " + rawInput).lowercase()
+        val hasLiveHint = titleOrDesc.contains("实况") || titleOrDesc.contains("livephoto") || titleOrDesc.contains("live photo")
 
-        if (videoCandidates.isNotEmpty() && (platform == PlatformType.DOUYIN || sniff.ogImages.size <= 1)) {
+        if (hasMultipleImages && (hasVideo || hasLiveHint)) {
+            // 图文实况图集（包含多张图片与关联实况动态视频流）
+            val liveVid = videoCandidates.firstOrNull()
+            val losslessVid = liveVid?.let { rewriteToLosslessOriginUrl(it, platform, preferences.xhsCdnHostRule) }
+            targetImages.distinct().take(35).forEachIndexed { idx, rawImgUrl ->
+                val preview = rawImgUrl.replace("http://", "https://")
+                val lossless = rewriteToLosslessOriginUrl(preview, platform, preferences.xhsCdnHostRule)
+                val isItemLive = hasVideo || hasLiveHint
+                mediaItems.add(
+                    MediaItem(
+                        id = "${workId}_img_$idx",
+                        index = idx,
+                        kind = if (isItemLive) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,
+                        badge = if (isItemLive) QualityBadge.LIVE else QualityBadge.RAW,
+                        originUrl = lossless,
+                        previewUrl = preview,
+                        liveVideoUrl = losslessVid,
+                        width = 1080,
+                        height = 1440,
+                        format = if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG",
+                        colorSpace = "Display P3",
+                        themeTitle = sniff.ogTitle.ifBlank { sniff.title },
+                        visualSeed = idx
+                    )
+                )
+            }
+        } else if (hasVideo && (!hasMultipleImages || platform == PlatformType.DOUYIN && targetImages.size <= 1)) {
             val rawVid = videoCandidates.first()
             val losslessVid = rewriteToLosslessOriginUrl(rawVid, platform, preferences.xhsCdnHostRule)
             mediaItems.add(
@@ -1198,7 +1259,6 @@ object MultiPlatformParserEngine {
                 )
             )
         } else {
-            val targetImages = if (sniff.ogImages.isNotEmpty()) sniff.ogImages else imageCandidates.toList()
             targetImages.distinct().take(35).forEachIndexed { idx, rawImgUrl ->
                 val preview = rawImgUrl.replace("http://", "https://")
                 val lossless = rewriteToLosslessOriginUrl(preview, platform, preferences.xhsCdnHostRule)
@@ -1229,13 +1289,19 @@ object MultiPlatformParserEngine {
             .trim()
         val cleanDesc = sniff.ogDesc.ifBlank { cleanTitle }
 
+        val postTypeLabel = when {
+            mediaItems.any { it.isLivePhoto } -> "${platform.displayName}·实况图"
+            mediaItems.any { it.isVideo } -> "${platform.displayName}·视频"
+            else -> "${platform.displayName}·图集"
+        }
+
         return ParsedPost(
             id = "post_$workId",
             sourceShareText = rawInput,
             extractedUrl = cleanUrl,
             noteId = workId,
             platform = platform,
-            postTypeLabel = if (mediaItems.any { it.isVideo }) "${platform.displayName}·视频" else "${platform.displayName}·图集",
+            postTypeLabel = postTypeLabel,
             authorName = "${platform.displayName}创作者",
             authorHandle = "@${workId.take(8)}",
             authorAvatarUrl = "",

@@ -36,6 +36,7 @@ object HiddenWebViewExtractor {
         val routerDataJson: String?,
         val initialStateJson: String?,
         val renderDataEncoded: String?,
+        val apiResponseJson: String?,
         val stateScriptText: String,
         val rawHtml: String,
         val sniffedMediaUrls: List<String>
@@ -43,6 +44,44 @@ object HiddenWebViewExtractor {
 
     private const val MOBILE_UA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+
+    private val INJECT_HOOK_JS = """
+        (function() {
+            if (window.__ps_hooked) return;
+            window.__ps_hooked = true;
+            window.__ps_api_res = window.__ps_api_res || [];
+
+            function saveIfApi(txt) {
+                if (!txt || typeof txt !== 'string') return;
+                if (txt.indexOf('item_list') !== -1 || txt.indexOf('aweme_detail') !== -1 || txt.indexOf('imageList') !== -1) {
+                    window.__ps_api_res.push(txt);
+                }
+            }
+
+            if (window.fetch) {
+                var _fetch = window.fetch;
+                window.fetch = function() {
+                    return _fetch.apply(this, arguments).then(function(resp) {
+                        try {
+                            var c = resp.clone();
+                            c.text().then(saveIfApi);
+                        } catch(e) {}
+                        return resp;
+                    });
+                };
+            }
+
+            if (window.XMLHttpRequest) {
+                var _send = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.send = function() {
+                    this.addEventListener('load', function() {
+                        try { saveIfApi(this.responseText); } catch(e) {}
+                    });
+                    return _send.apply(this, arguments);
+                };
+            }
+        })();
+    """.trimIndent()
 
     private val EXTRACT_JS = """
         (function() {
@@ -90,6 +129,11 @@ object HiddenWebViewExtractor {
                     } catch(e) {}
                 }
 
+                var apiStr = null;
+                if (window.__ps_api_res && window.__ps_api_res.length > 0) {
+                    apiStr = window.__ps_api_res[window.__ps_api_res.length - 1];
+                }
+
                 var scriptDump = '';
                 var scripts = document.querySelectorAll('script');
                 for (var i = 0; i < scripts.length; i++) {
@@ -117,6 +161,7 @@ object HiddenWebViewExtractor {
                     routerData: routerStr,
                     initialState: initStr,
                     renderData: renderStr,
+                    apiResponse: apiStr,
                     stateScript: scriptDump.slice(0, 350000),
                     html: document.documentElement ? document.documentElement.outerHTML.slice(0, 200000) : ''
                 });
@@ -179,6 +224,8 @@ object HiddenWebViewExtractor {
                             val hasValidMediaState = parsed != null && (
                                 (parsed.routerDataJson?.contains("item_list") == true) ||
                                     (parsed.routerDataJson?.contains("image_post_info") == true) ||
+                                    (parsed.apiResponseJson?.contains("item_list") == true) ||
+                                    (parsed.apiResponseJson?.contains("aweme_detail") == true) ||
                                     (parsed.initialStateJson?.contains("imageList") == true) ||
                                     (parsed.initialStateJson?.contains("imagesList") == true) ||
                                     (parsed.initialStateJson?.contains("livePhoto") == true) ||
@@ -187,7 +234,7 @@ object HiddenWebViewExtractor {
                                     parsed.ogImages.isNotEmpty() ||
                                     parsed.ogVideo.isNotBlank() ||
                                     parsed.domVideos.isNotEmpty() ||
-                                    sniffedUrls.any { it.contains("aweme/v1/play") || it.contains("douyinvod.com") || it.contains("sns-video") || it.endsWith(".mp4") }
+                                    sniffedUrls.any { it.contains("aweme/v1/play") || it.contains("douyinvod.com") || it.contains("bytevcloud") || it.contains("sns-video") || it.endsWith(".mp4") }
                                 )
 
                             if (hasValidMediaState || attempt >= 11) {
@@ -199,6 +246,16 @@ object HiddenWebViewExtractor {
                     }
 
                     wv.webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            super.onPageStarted(view, url, favicon)
+                            view?.evaluateJavascript(INJECT_HOOK_JS, null)
+                        }
+
+                        override fun onLoadResource(view: WebView?, url: String?) {
+                            super.onLoadResource(view, url)
+                            view?.evaluateJavascript(INJECT_HOOK_JS, null)
+                        }
+
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?
@@ -216,6 +273,10 @@ object HiddenWebViewExtractor {
                             if (
                                 lower.contains("aweme/v1/play") ||
                                 lower.contains("douyinvod.com") ||
+                                lower.contains("bytevcloud") ||
+                                lower.contains("amemv.com") ||
+                                lower.contains("volces.com") ||
+                                lower.contains("snssdk.com") && lower.contains("play") ||
                                 lower.contains("sns-webpic") ||
                                 lower.contains("sns-video") ||
                                 lower.contains("ci.xiaohongshu.com") ||
@@ -227,7 +288,7 @@ object HiddenWebViewExtractor {
                                 lower.contains("chenzhongtech.com") ||
                                 lower.endsWith(".mp4")
                             ) {
-                                if (!lower.contains("avatar") && !lower.contains("icon") && !lower.contains(".js") && !lower.contains(".css")) {
+                                if (!lower.contains("avatar") && !lower.contains("icon") && !lower.contains(".js") && !lower.contains(".css") && !lower.contains(".mp3") && !lower.contains(".m4a")) {
                                     sniffedUrls.add(u)
                                 }
                             }
@@ -236,6 +297,7 @@ object HiddenWebViewExtractor {
 
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
+                            view?.evaluateJavascript(INJECT_HOOK_JS, null)
                             view?.postDelayed({ probeDom(1) }, 500L)
                         }
                     }
@@ -289,6 +351,7 @@ object HiddenWebViewExtractor {
                 routerDataJson = obj.optStr("routerData").takeIf { it.isNotBlank() && it != "null" },
                 initialStateJson = obj.optStr("initialState").takeIf { it.isNotBlank() && it != "null" },
                 renderDataEncoded = obj.optStr("renderData").takeIf { it.isNotBlank() && it != "null" },
+                apiResponseJson = obj.optStr("apiResponse").takeIf { it.isNotBlank() && it != "null" },
                 stateScriptText = obj.optStr("stateScript"),
                 rawHtml = obj.optStr("html"),
                 sniffedMediaUrls = sniffedUrls
