@@ -1,4 +1,4 @@
-# PureSnap —— 多平台无水印原图/实况图/视频提取工具
+# PureSnap —— 多平台无水印原图/视频提取工具
 
 <p align="left">
   <img src="https://img.shields.io/badge/Platform-Android%2010%2B%20(API%2029%2B)-2563EB?logo=android&logoColor=white" alt="Android 10+" />
@@ -14,7 +14,7 @@
 ## ✨ 产品核心定位与亮点
 
 - **🎯 真·原图直出（无损画质）**
-  直接解析目标平台 CDN 原始媒体流直链，剥离小红书/抖音/最右等平台的缩放与水印后缀（如 `?imageView2/...`），保留原始分辨率、色彩空间（Display P3 / sRGB）以及**小红书实况图（Live Photo）**动态视频流。
+  直接解析目标平台 CDN 原始媒体流直链，剥离小红书/抖音/最右/快手等平台的缩放与水印后缀（如 `?imageView2/...`），保留原始最高分辨率与真实色彩空间（Display P3 / sRGB）。
 - **⚡ 原生级无感交互（半屏即用即走）**
   - **系统分享面板直达（Share Sheet Overlay）**：注册系统 `ACTION_SEND`，在小红书/抖音点击「分享 → 更多 → PureSnap · 无损提取」时，直接在当前界面底部拉起透明半屏解析抽屉，一键保存后自动下滑关闭，无缝返回原应用。
   - **剪贴板灵动感知（Smart Paste Banner）**：切回前台时自动识别剪贴板中的分享口令，顶部滑出带微震动反馈的灵动胶囊提示条，支持一键触发解析。
@@ -31,7 +31,7 @@
 | | 剪贴板智能感知 | P0 | 切回前台自动识别平台口令并弹出灵动胶囊提示条（[`SmartPasteBanner.kt`](app/src/main/java/com/puresnap/app/ui/components/SmartPasteBanner.kt)） |
 | | 系统分享半屏抽屉 | P0 | 透明 Activity 承载 `ModalBottomSheet` 半屏极速解析与自动收起（[`ShareOverlayActivity.kt`](app/src/main/java/com/puresnap/app/ShareOverlayActivity.kt)） |
 | **多平台解析引擎** | 多平台覆盖 | P0 | 支持 **小红书、抖音、最右、快手**，并兼容皮皮虾、微博、Bilibili 短链提取（[`MultiPlatformParserEngine.kt`](app/src/main/java/com/puresnap/app/data/parser/MultiPlatformParserEngine.kt)） |
-| | 媒体类型全覆盖 | P0 | 支持多图集（最高 30+ 张）、单视频、小红书实况图（Live Photo 拆解为原图 + 高清 MP4）、BGM 原声音频提取 |
+| | 媒体类型全覆盖 | P0 | 支持多图集（最高 35+ 张超清原图）、高清单视频、BGM 原声音频提取 |
 | | 原图格式转换引擎 | P1 | 针对 WebP/HEIC 兼容性痛点，支持「兼容模式（100% 质量 JPG）」、「保持 CDN 原格式」与「无损 PNG」三种模式 |
 | **预览与下载管理** | 九宫格选集与滑动多选 | P0 | 默认全选，支持双指缩放高清预览、视频在线播放、长按滑动连续多选（Drag-to-Select）、全选/反选（[`MediaGridPreview.kt`](app/src/main/java/com/puresnap/app/ui/components/MediaGridPreview.kt)） |
 | | 配套信息一键提取 | P1 | 支持独立复制原帖标题、纯净正文文案、话题标签（Tags），以及下载无水印封面图与作者高清头像 |
@@ -83,4 +83,4 @@ PureSnap/
 
 ## ⚖️ 免责声明
 
-本工具仅提供公开社交平台网页端原始媒体资源的个人学习、欣赏与备份便利。请尊重原作者的著作权与知识产权，切勿将提取的图片、视频、实况及音频用于任何未经授权的商业用途。
+本工具仅提供公开社交平台网页端原始媒体资源的个人学习、欣赏与备份便利。请尊重原作者的著作权与知识产权，切勿将提取的图片、视频及音频用于任何未经授权的商业用途。
