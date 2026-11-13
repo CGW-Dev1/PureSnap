@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +28,8 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FilterCenterFocus
+import androidx.compose.material.icons.filled.MotionPhotosAuto
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -45,12 +49,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.puresnap.app.model.ParseErrorType
+import com.puresnap.app.ui.MorphDownloadState
 import com.puresnap.app.ui.PureSnapViewModel
 import com.puresnap.app.ui.components.MediaGridPreview
 import com.puresnap.app.ui.components.MorphingDownloadButton
@@ -61,10 +67,9 @@ import kotlinx.coroutines.launch
 
 /**
  * 系统分享半屏抽屉（Share Sheet Overlay — P0 & 第三章 3.2 核心体验）
- * 当用户在小红书/抖音点击“分享 → 更多”选择「PureSnap · 无损提取」时：
- * - 不启动完整主页面，而是以透明 Activity 承载底部 ModalBottomSheet 半屏弹窗
- * - 抽屉内直接显示流光骨架屏 -> 展现九宫格图集 -> 点击“一键保存” -> 弹出 Toast “已保存 X 张原图至相册” ->
- *   抽屉自动下滑关闭，用户无缝回到刚才刷视频/看笔记的界面。
+ * 当用户在国内外平台点击“分享 → 更多”选择「PureSnap · 无损提取」时：
+ * - 以透明 Activity 承载底部 ModalBottomSheet 半屏弹窗，支持实况照片、图集全量预览、视频与背景 BGM 无损直出
+ * - 保存完成后自动平滑收起并无缝返回原应用
  */
 class ShareOverlayActivity : ComponentActivity() {
 
@@ -85,6 +90,7 @@ class ShareOverlayActivity : ComponentActivity() {
             val currentPost by viewModel.currentPost.collectAsState()
             val parseError by viewModel.parseError.collectAsState()
             val downloadState by viewModel.downloadState.collectAsState()
+            val bgmSaving by viewModel.bgmSaving.collectAsState()
 
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
@@ -154,8 +160,14 @@ class ShareOverlayActivity : ComponentActivity() {
                             Row {
                                 IconButton(
                                     onClick = {
+                                        val launchText = currentPost?.extractedUrl?.ifBlank { null }
+                                            ?: currentPost?.sourceShareText?.ifBlank { null }
+                                            ?: sharedText.orEmpty()
                                         val mainIntent = Intent(context, MainActivity::class.java).apply {
                                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                            if (launchText.isNotBlank()) {
+                                                putExtra(MainActivity.EXTRA_SHARE_URL, launchText)
+                                            }
                                         }
                                         startActivity(mainIntent)
                                         finish()
@@ -253,14 +265,93 @@ class ShareOverlayActivity : ComponentActivity() {
                                     }
                                 }
 
+                                if (post.hasLivePhotos || post.bgmAudio != null) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        if (post.hasLivePhotos) {
+                                            Surface(
+                                                color = Color(0xFF0D9488).copy(alpha = 0.14f),
+                                                shape = CircleShape
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.MotionPhotosAuto,
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF0D9488),
+                                                        modifier = Modifier.size(13.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = "含 ${post.livePhotoCount} 张实况照片",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color(0xFF0D9488)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if (post.bgmAudio != null) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                                shape = CircleShape,
+                                                modifier = Modifier
+                                                    .clip(CircleShape)
+                                                    .clickable(enabled = !bgmSaving) {
+                                                        viewModel.saveBgmAudio(context)
+                                                    }
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.MusicNote,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.secondary,
+                                                        modifier = Modifier.size(13.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = if (bgmSaving) "保存中…" else "保存 BGM",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                MediaGridPreview(
-                                    items = post.mediaItems.take(9),
-                                    platform = post.platform,
-                                    onToggleSelect = viewModel::toggleItemSelection,
-                                    onDragSetSelect = viewModel::setItemSelection
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 340.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    MediaGridPreview(
+                                        items = post.mediaItems,
+                                        platform = post.platform,
+                                        onToggleSelect = viewModel::toggleItemSelection,
+                                        onDragSetSelect = viewModel::setItemSelection,
+                                        customCookie = preferences.cookieForPlatform(post.platform),
+                                        onSaveSingleItem = { item ->
+                                            viewModel.downloadSingleMediaItem(context, item)
+                                        },
+                                        onCopyUrl = { url ->
+                                            viewModel.copyTextToClipboard(context, "直链", url)
+                                        }
+                                    )
+                                }
 
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 14.dp),
@@ -297,10 +388,14 @@ class ShareOverlayActivity : ComponentActivity() {
                                         downloadState = downloadState,
                                         selectedCount = post.selectedCount,
                                         onClick = {
-                                            viewModel.downloadSelectedMedia(context) { savedCount, _ ->
+                                            viewModel.downloadSelectedMedia(context) { savedCount, folderPath ->
+                                                val completed = viewModel.downloadState.value as? MorphDownloadState.Completed
+                                                val msg = completed?.summaryLabel?.let {
+                                                    "✓ $it 至 $folderPath"
+                                                } ?: "✓ 已保存 $savedCount 项原片至 $folderPath"
                                                 Toast.makeText(
                                                     context,
-                                                    "已保存 $savedCount 张原图至相册",
+                                                    msg,
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                                 // 保存完成后自动平滑收起半屏抽屉并结束透明 Activity
@@ -328,6 +423,6 @@ class ShareOverlayActivity : ComponentActivity() {
             return intent.getStringExtra(Intent.EXTRA_TEXT)
                 ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)
         }
-        return null
+        return intent.dataString
     }
 }

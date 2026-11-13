@@ -29,28 +29,37 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.MotionPhotosAuto
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -86,27 +95,50 @@ import java.util.Locale
 
 /**
  * Tab 2：媒体库（Gallery）
- * 负责本地已下载图集/视频/音频的分类瀑布流浏览（LazyVerticalStaggeredGrid）与批量管理。
+ * 负责本地已下载原图/实况/视频/音频的分类瀑布流浏览、搜索筛选、缩略图 LRU 缓存与文件管理。
  */
 @Composable
 fun GalleryScreen(
     downloadedMedia: List<DownloadedMediaEntity>,
-    onDeleteSelectedIds: (List<Long>) -> Unit,
+    onDeleteSelectedIds: (ids: List<Long>, physicalUris: List<String>) -> Unit,
     onJumpToWorkbench: () -> Unit,
+    onOpenTools: () -> Unit = {},
+    onCopyText: (label: String, text: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var selectedPlatformFilter by remember { mutableStateOf("ALL") }
     var selectedKindFilter by remember { mutableStateOf("ALL") }
+    var searchVisible by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     var batchMode by remember { mutableStateOf(false) }
     val selectedIds = remember { mutableStateListOf<Long>() }
     var inspectingEntity by remember { mutableStateOf<DownloadedMediaEntity?>(null) }
+    var pendingDeleteTargets by remember { mutableStateOf<List<DownloadedMediaEntity>?>(null) }
 
-    val filteredList = remember(downloadedMedia, selectedPlatformFilter, selectedKindFilter) {
+    val totalBytes = remember(downloadedMedia) {
+        downloadedMedia.sumOf { it.fileSizeBytes.coerceAtLeast(0L) }
+    }
+    val totalMbLabel = remember(totalBytes) {
+        val mb = totalBytes / (1024.0 * 1024.0)
+        if (mb >= 1024.0) String.format(Locale.US, "%.2f GB", mb / 1024.0)
+        else String.format(Locale.US, "%.1f MB", mb)
+    }
+
+    val platformCounts = remember(downloadedMedia) {
+        downloadedMedia.groupingBy { it.platform }.eachCount()
+    }
+
+    val filteredList = remember(downloadedMedia, selectedPlatformFilter, selectedKindFilter, searchQuery) {
+        val q = searchQuery.trim().lowercase()
         downloadedMedia.filter { item ->
             val matchPlatform = selectedPlatformFilter == "ALL" || item.platform == selectedPlatformFilter
             val matchKind = selectedKindFilter == "ALL" || item.mediaKind == selectedKindFilter
-            matchPlatform && matchKind
+            val matchQuery = q.isEmpty() ||
+                item.title.lowercase().contains(q) ||
+                item.authorName.lowercase().contains(q) ||
+                item.fileName.lowercase().contains(q)
+            matchPlatform && matchKind && matchQuery
         }
     }
 
@@ -116,7 +148,7 @@ fun GalleryScreen(
             .padding(horizontal = 16.dp)
             .padding(top = 10.dp)
     ) {
-        // 顶部栏：左侧标题与右侧等大胶囊按钮严格处在同一水平中心线
+        // 顶部栏：左侧标题+统计与右侧操作按钮严格水平对齐
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -141,7 +173,7 @@ fun GalleryScreen(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "已归档 ${downloadedMedia.size} 项原片 · 按平台自动分目录存储",
+                    text = "已归档 ${downloadedMedia.size} 项原片 · 占用 $totalMbLabel",
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 11.5.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -151,11 +183,10 @@ fun GalleryScreen(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (batchMode) {
                     val allSelected = filteredList.isNotEmpty() && selectedIds.size == filteredList.size
-                    // 「全选/取消」与「完成」采用完全一致的等宽等高胶囊规格 (68.dp × 34.dp)
                     GalleryTopActionCapsule(
                         label = if (allSelected) "取消" else "全选",
                         isPrimary = false,
@@ -176,50 +207,106 @@ fun GalleryScreen(
                             selectedIds.clear()
                         }
                     )
-                } else if (downloadedMedia.isNotEmpty()) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 2.dp,
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(CircleShape)
-                            .border(
-                                width = 0.8.dp,
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
-                                shape = CircleShape
-                            )
-                            .clickable { batchMode = true }
+                } else {
+                    IconButton(
+                        onClick = onOpenTools,
+                        modifier = Modifier.size(34.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier.padding(horizontal = 13.dp)
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = "实用工具箱",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    if (downloadedMedia.isNotEmpty()) {
+                        IconButton(
+                            onClick = {
+                                searchVisible = !searchVisible
+                                if (!searchVisible) searchQuery = ""
+                            },
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Checklist,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(15.dp)
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "搜索",
+                                tint = if (searchVisible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = "批量管理",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                softWrap = false
-                            )
+                        }
+
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 2.dp,
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(CircleShape)
+                                .border(
+                                    width = 0.8.dp,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+                                    shape = CircleShape
+                                )
+                                .clickable { batchMode = true }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(horizontal = 12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Checklist,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "批量",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        if (searchVisible) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("按作者、标题或文件名搜索…", fontSize = 12.5.sp) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                trailingIcon = if (searchQuery.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "清除", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                } else null,
+                singleLine = true,
+                shape = CircleShape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+            )
+        }
 
-        // 平台分类筛选栏（统一高度、精致无重边框胶囊）
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // 动态平台分类筛选栏（仅展示已有归档的平台 + 计数）
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -229,21 +316,24 @@ fun GalleryScreen(
                 .padding(vertical = 3.dp)
         ) {
             UniformFilterCapsuleChip(
-                label = "全部平台",
+                label = "全部 (${downloadedMedia.size})",
                 selected = selectedPlatformFilter == "ALL",
                 onClick = { selectedPlatformFilter = "ALL" }
             )
-            PlatformType.entries.filter { it != PlatformType.UNKNOWN }.forEach { platform ->
-                UniformFilterCapsuleChip(
-                    label = platform.displayName,
-                    selected = selectedPlatformFilter == platform.name,
-                    accentColor = platform.brandColor,
-                    onClick = { selectedPlatformFilter = platform.name }
-                )
+            PlatformType.entries.forEach { platform ->
+                val count = platformCounts[platform.name] ?: 0
+                if (count > 0) {
+                    UniformFilterCapsuleChip(
+                        label = "${platform.shortTag} ($count)",
+                        selected = selectedPlatformFilter == platform.name,
+                        accentColor = platform.brandColor,
+                        onClick = { selectedPlatformFilter = platform.name }
+                    )
+                }
             }
         }
 
-        // 媒体类型筛选栏（统一高度、精致胶囊）
+        // 媒体类型筛选栏（含实况动图分类）
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -255,6 +345,7 @@ fun GalleryScreen(
             val kindFilters = listOf(
                 "ALL" to "全部类型",
                 MediaKind.IMAGE.name to "无损原图",
+                MediaKind.LIVE_PHOTO.name to "实况动图",
                 MediaKind.VIDEO.name to "高清视频",
                 MediaKind.AUDIO.name to "提取音频"
             )
@@ -358,9 +449,10 @@ fun GalleryScreen(
                                 .height(32.dp)
                                 .clip(CircleShape)
                                 .clickable {
-                                    onDeleteSelectedIds(selectedIds.toList())
-                                    selectedIds.clear()
-                                    batchMode = false
+                                    val targets = filteredList.filter { selectedIds.contains(it.id) }
+                                    if (targets.isNotEmpty()) {
+                                        pendingDeleteTargets = targets
+                                    }
                                 }
                         ) {
                             Row(
@@ -487,9 +579,86 @@ fun GalleryScreen(
         GalleryItemDetailDialog(
             entity = entity,
             onDismiss = { inspectingEntity = null },
+            onCopyMd5 = {
+                onCopyText("MD5", entity.md5Hash)
+            },
+            onShare = {
+                runCatching {
+                    val uri = Uri.parse(entity.mediaStoreUri)
+                    val mime = when (entity.mediaKind) {
+                        MediaKind.VIDEO.name -> "video/*"
+                        MediaKind.AUDIO.name -> "audio/*"
+                        else -> "image/*"
+                    }
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = mime
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "分享或使用其他应用打开"))
+                }
+            },
             onDelete = {
-                onDeleteSelectedIds(listOf(entity.id))
+                pendingDeleteTargets = listOf(entity)
                 inspectingEntity = null
+            }
+        )
+    }
+
+    pendingDeleteTargets?.let { targets ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteTargets = null },
+            title = {
+                Text(
+                    text = "删除 ${targets.size} 项媒体记录",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "可选择仅从 PureSnap 媒体库移除索引记录，或连同手机相册中的物理文件一并删除（需系统媒体库权限确认）。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteSelectedIds(
+                            targets.map { it.id },
+                            targets.map { it.mediaStoreUri }.filter { it.isNotBlank() }
+                        )
+                        selectedIds.removeAll(targets.map { it.id }.toSet())
+                        if (selectedIds.isEmpty()) batchMode = false
+                        pendingDeleteTargets = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Text("含相册文件删除")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(
+                        onClick = {
+                            pendingDeleteTargets = null
+                        }
+                    ) {
+                        Text("取消")
+                    }
+                    TextButton(
+                        onClick = {
+                            onDeleteSelectedIds(targets.map { it.id }, emptyList())
+                            selectedIds.removeAll(targets.map { it.id }.toSet())
+                            if (selectedIds.isEmpty()) batchMode = false
+                            pendingDeleteTargets = null
+                        }
+                    ) {
+                        Text("仅移除记录")
+                    }
+                }
             }
         )
     }
@@ -638,26 +807,12 @@ private fun GalleryWaterfallCard(
 
     LaunchedEffect(entity.id, entity.mediaStoreUri) {
         if (entity.mediaKind != MediaKind.AUDIO.name) {
-            previewBmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    val uri = Uri.parse(entity.mediaStoreUri)
-                    if (entity.mediaKind == MediaKind.VIDEO.name) {
-                        val retriever = android.media.MediaMetadataRetriever()
-                        try {
-                            retriever.setDataSource(context, uri)
-                            retriever.getFrameAtTime(0)
-                        } finally {
-                            runCatching { retriever.release() }
-                        }
-                    } else {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            android.graphics.BitmapFactory.decodeStream(input)
-                        }
-                    }
-                } catch (_: Exception) {
-                    null
-                }
-            } ?: run {
+            previewBmp = DynamicMediaRenderer.loadLocalGalleryThumbnail(
+                context = context,
+                uriStr = entity.mediaStoreUri,
+                mediaKind = entity.mediaKind,
+                maxDimension = 520
+            ) ?: run {
                 val dummyItem = MediaItem(
                     id = "gallery_${entity.id}",
                     index = (entity.id % 10).toInt(),
@@ -672,18 +827,25 @@ private fun GalleryWaterfallCard(
                 DynamicMediaRenderer.loadPreviewBitmap(
                     item = dummyItem,
                     platform = platform,
-                    maxDimension = 640
+                    maxDimension = 520
                 )
             }
         }
     }
 
-    // 自适应瀑布流高宽比
-    val cardAspect = remember(entity.id) {
-        if (entity.mediaKind == MediaKind.AUDIO.name) 1.35f
-        else if (entity.id % 3L == 0L) 0.72f
-        else if (entity.id % 2L == 0L) 0.80f
-        else 0.86f
+    // 自适应真实比例瀑布流高宽比
+    val cardAspect = remember(entity.id, entity.width, entity.height, entity.mediaKind) {
+        if (entity.mediaKind == MediaKind.AUDIO.name) {
+            1.35f
+        } else if (entity.width > 0 && entity.height > 0) {
+            (entity.width.toFloat() / entity.height.toFloat()).coerceIn(0.62f, 1.45f)
+        } else if (entity.id % 3L == 0L) {
+            0.72f
+        } else if (entity.id % 2L == 0L) {
+            0.80f
+        } else {
+            0.86f
+        }
     }
 
     Card(
@@ -819,6 +981,35 @@ private fun GalleryWaterfallCard(
                                 .size(14.dp)
                         )
                     }
+                } else if (entity.mediaKind == MediaKind.LIVE_PHOTO.name) {
+                    Surface(
+                        color = Color(0xFF0D9488).copy(alpha = 0.90f),
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MotionPhotosAuto,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = "LIVE",
+                                color = Color.White,
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
                 }
 
                 // 底部格式与大小信息
@@ -899,9 +1090,24 @@ private fun GalleryWaterfallCard(
 private fun GalleryItemDetailDialog(
     entity: DownloadedMediaEntity,
     onDismiss: () -> Unit,
+    onCopyMd5: () -> Unit,
+    onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val context = LocalContext.current
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
+    var detailBitmap by remember(entity.id) { mutableStateOf<Bitmap?>(null) }
+
+    LaunchedEffect(entity.id, entity.mediaStoreUri) {
+        if (entity.mediaKind != MediaKind.AUDIO.name) {
+            detailBitmap = DynamicMediaRenderer.loadLocalGalleryThumbnail(
+                context = context,
+                uriStr = entity.mediaStoreUri,
+                mediaKind = entity.mediaKind,
+                maxDimension = 960
+            )
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -911,7 +1117,11 @@ private fun GalleryItemDetailDialog(
             ),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp)
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -919,10 +1129,46 @@ private fun GalleryItemDetailDialog(
                 ) {
                     Text(
                         text = "原片归档与 MD5 详情",
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
                     IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                         Icon(imageVector = Icons.Default.Close, contentDescription = "关闭")
+                    }
+                }
+
+                if (detailBitmap != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Image(
+                            bitmap = detailBitmap!!.asImageBitmap(),
+                            contentDescription = entity.fileName,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        if (entity.mediaKind == MediaKind.LIVE_PHOTO.name) {
+                            Surface(
+                                color = Color(0xFF0D9488).copy(alpha = 0.90f),
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = "实况照片 LIVE",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -937,6 +1183,7 @@ private fun GalleryItemDetailDialog(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.padding(12.dp)
                     ) {
+                        DetailRow("文件名", entity.fileName)
                         DetailRow("原作者", "@${entity.authorName}")
                         DetailRow("分辨率/格式", "${entity.width}×${entity.height} · ${entity.format}")
                         DetailRow("文件大小", entity.formattedFileSize)
@@ -957,7 +1204,14 @@ private fun GalleryItemDetailDialog(
                             )
                         }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onCopyMd5)
+                                .padding(vertical = 2.dp)
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Fingerprint,
                                 contentDescription = null,
@@ -969,16 +1223,24 @@ private fun GalleryItemDetailDialog(
                                 text = "MD5: ${entity.md5Hash} ${if (entity.md5Modified) "(已去重微调)" else "(原始校验)"}",
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.secondary
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "复制 MD5",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     OutlinedButton(
@@ -986,20 +1248,31 @@ private fun GalleryItemDetailDialog(
                         shape = CircleShape,
                         modifier = Modifier
                             .weight(1f)
-                            .height(42.dp)
+                            .height(40.dp)
                     ) {
-                        Icon(imageVector = Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(imageVector = Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("移除记录", maxLines = 1, softWrap = false)
+                        Text("删除", maxLines = 1, softWrap = false, fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onShare,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("分享", maxLines = 1, softWrap = false, fontSize = 12.sp)
                     }
                     Button(
                         onClick = onDismiss,
                         shape = CircleShape,
                         modifier = Modifier
                             .weight(1f)
-                            .height(42.dp)
+                            .height(40.dp)
                     ) {
-                        Text("确定", maxLines = 1, softWrap = false)
+                        Text("关闭", maxLines = 1, softWrap = false, fontSize = 12.sp)
                     }
                 }
             }

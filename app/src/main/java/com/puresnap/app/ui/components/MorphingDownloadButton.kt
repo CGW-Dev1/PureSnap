@@ -148,7 +148,7 @@ fun MorphingDownloadButton(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "保存选中原图 ($selectedCount)",
+                        text = "保存选中原片 ($selectedCount)",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.5.sp,
@@ -166,7 +166,7 @@ fun MorphingDownloadButton(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "正在保存原图 (${downloadState.completed}/${downloadState.total})...",
+                        text = "正在无损保存 (${downloadState.completed}/${downloadState.total})…",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp,
@@ -185,7 +185,7 @@ fun MorphingDownloadButton(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "已保存 ${downloadState.count} 项至相册 ✓",
+                        text = downloadState.summaryLabel.ifBlank { "已保存 ${downloadState.count} 项至相册" } + " ✓",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.5.sp,

@@ -30,10 +30,13 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MotionPhotosAuto
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -64,6 +68,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.puresnap.app.data.local.ParseHistoryEntity
+import com.puresnap.app.model.MediaKind
 import com.puresnap.app.model.PlatformType
 import com.puresnap.app.util.DynamicMediaRenderer
 import java.text.SimpleDateFormat
@@ -80,6 +85,7 @@ fun HistoryBottomSheet(
     historyList: List<ParseHistoryEntity>,
     onDismiss: () -> Unit,
     onRestoreRecord: (ParseHistoryEntity) -> Unit,
+    onRefreshRecord: (ParseHistoryEntity) -> Unit = {},
     onDeleteRecord: (Long) -> Unit,
     onClearAll: () -> Unit
 ) {
@@ -87,6 +93,10 @@ fun HistoryBottomSheet(
     var searchQuery by remember { mutableStateOf("") }
     var selectedPlatform by remember { mutableStateOf("ALL") }
     val dateFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+
+    val platformCounts = remember(historyList) {
+        historyList.groupingBy { it.platform }.eachCount()
+    }
 
     val filteredHistory = remember(historyList, searchQuery, selectedPlatform) {
         historyList.filter { item ->
@@ -221,14 +231,17 @@ fun HistoryBottomSheet(
                     selected = selectedPlatform == "ALL",
                     onClick = { selectedPlatform = "ALL" }
                 )
-                PlatformType.entries.filter { it != PlatformType.UNKNOWN }.forEach { platform ->
-                    UniformFilterCapsuleChip(
-                        label = platform.displayName,
-                        selected = selectedPlatform == platform.name,
-                        accentColor = platform.brandColor,
-                        onClick = { selectedPlatform = platform.name }
-                    )
-                }
+                PlatformType.entries
+                    .filter { it != PlatformType.UNKNOWN && ((platformCounts[it.name] ?: 0) > 0 || selectedPlatform == it.name) }
+                    .forEach { platform ->
+                        val count = platformCounts[platform.name] ?: 0
+                        UniformFilterCapsuleChip(
+                            label = if (count > 0) "${platform.displayName} ($count)" else platform.displayName,
+                            selected = selectedPlatform == platform.name,
+                            accentColor = platform.brandColor,
+                            onClick = { selectedPlatform = platform.name }
+                        )
+                    }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -258,6 +271,7 @@ fun HistoryBottomSheet(
                             record = record,
                             dateFormat = dateFormat,
                             onRestoreRecord = onRestoreRecord,
+                            onRefreshRecord = onRefreshRecord,
                             onDeleteRecord = onDeleteRecord,
                             onDismiss = onDismiss
                         )
@@ -280,6 +294,7 @@ private fun HistoryItemCard(
     record: ParseHistoryEntity,
     dateFormat: SimpleDateFormat,
     onRestoreRecord: (ParseHistoryEntity) -> Unit,
+    onRefreshRecord: (ParseHistoryEntity) -> Unit,
     onDeleteRecord: (Long) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -295,19 +310,30 @@ private fun HistoryItemCard(
         }
     }
 
-    val effectiveCoverUrl = remember(record.coverUrl, record.mediaItemsJson) {
-        if (record.coverUrl.isNotBlank()) record.coverUrl
-        else {
-            runCatching {
-                val array = com.google.gson.JsonParser.parseString(record.mediaItemsJson).asJsonArray
-                if (array.size() > 0) {
-                    val obj = array[0].asJsonObject
-                    obj.get("previewUrl")?.asString?.ifBlank { null }
+    val mediaMetaSummary = remember(record.coverUrl, record.mediaItemsJson) {
+        var cover = record.coverUrl
+        var liveCount = 0
+        var videoCount = 0
+        runCatching {
+            val array = com.google.gson.JsonParser.parseString(record.mediaItemsJson).asJsonArray
+            for (i in 0 until array.size()) {
+                val obj = array[i].asJsonObject
+                if (cover.isBlank() && i == 0) {
+                    cover = obj.get("previewUrl")?.asString?.ifBlank { null }
                         ?: obj.get("originUrl")?.asString?.ifBlank { null }
-                } else null
-            }.getOrNull().orEmpty()
+                        ?: ""
+                }
+                val kind = obj.get("kind")?.asString.orEmpty()
+                val isLive = obj.get("isLivePhoto")?.asBoolean == true || kind == MediaKind.LIVE_PHOTO.name
+                if (isLive) liveCount++
+                else if (kind == MediaKind.VIDEO.name) videoCount++
+            }
         }
+        Triple(cover, liveCount, videoCount)
     }
+    val effectiveCoverUrl = mediaMetaSummary.first
+    val livePhotoCount = mediaMetaSummary.second
+    val videoCount = mediaMetaSummary.third
 
     LaunchedEffect(effectiveCoverUrl) {
         if (effectiveCoverUrl.isNotBlank()) {
@@ -408,6 +434,33 @@ private fun HistoryItemCard(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             softWrap = false
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // 重新联网解析刷新按钮（用于更新过期直链）
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            onRefreshRecord(record)
+                            onDismiss()
+                        }
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "联网刷新",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
@@ -536,6 +589,60 @@ private fun HistoryItemCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (livePhotoCount > 0) {
+                        Surface(
+                            color = Color(0xFF0D9488).copy(alpha = 0.14f),
+                            shape = CircleShape
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MotionPhotosAuto,
+                                    contentDescription = null,
+                                    tint = Color(0xFF0D9488),
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text(
+                                    text = "$livePhotoCount 实况",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0D9488),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    } else if (videoCount > 0) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                            shape = CircleShape
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Videocam,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text(
+                                    text = "$videoCount 视频",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    }
+
                     // 项数胶囊
                     Surface(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),

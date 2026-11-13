@@ -60,12 +60,26 @@ import com.puresnap.app.ui.components.WebViewAssistDialog
 import com.puresnap.app.ui.screens.GalleryScreen
 import com.puresnap.app.ui.screens.HistoryBottomSheet
 import com.puresnap.app.ui.screens.SettingsBottomSheet
+import com.puresnap.app.ui.screens.SupportedPlatformsSheet
+import com.puresnap.app.ui.screens.UtilityToolboxSheet
 import com.puresnap.app.ui.screens.WorkbenchScreen
 import com.puresnap.app.ui.theme.PureSnapTheme
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val EXTRA_SHARE_URL = "extra_share_url"
+    }
+
     private val viewModel: PureSnapViewModel by viewModels()
+    private var lastClipboardInspectMs: Long = 0L
+
+    private fun inspectClipboardDebounced() {
+        val now = System.currentTimeMillis()
+        if (now - lastClipboardInspectMs < 850L) return
+        lastClipboardInspectMs = now
+        viewModel.inspectClipboardOnForeground(this)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,17 +98,19 @@ class MainActivity : ComponentActivity() {
             val historyList by viewModel.historyList.collectAsState()
             val downloadedMedia by viewModel.downloadedMediaList.collectAsState()
             val webViewAssistUrl by viewModel.webViewAssistUrl.collectAsState()
+            val batchQueue by viewModel.batchQueue.collectAsState()
+            val isBatchRunning by viewModel.isBatchRunning.collectAsState()
 
             val context = LocalContext.current
             val lifecycleOwner = LocalLifecycleOwner.current
 
-            // 切回前台时自动感知剪贴板中的小红书/抖音/最右口令
+            // 切回前台时自动感知剪贴板中的国内外分享口令或直链（防抖避免与 onWindowFocusChanged 重复触发）
             DisposableEffect(lifecycleOwner) {
                 val observer = LifecycleEventObserver { _, event ->
                     if (event == Lifecycle.Event.ON_RESUME) {
                         window.decorView.postDelayed({
-                            viewModel.inspectClipboardOnForeground(context)
-                        }, 260)
+                            inspectClipboardDebounced()
+                        }, 240)
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
@@ -110,6 +126,8 @@ class MainActivity : ComponentActivity() {
                 var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: 工作台, 1: 媒体库
                 var showHistorySheet by remember { mutableStateOf(false) }
                 var showSettingsSheet by remember { mutableStateOf(false) }
+                var showToolsSheet by remember { mutableStateOf(false) }
+                var showPlatformsSheet by remember { mutableStateOf(false) }
 
                 Surface(
                     color = MaterialTheme.colorScheme.background,
@@ -140,9 +158,16 @@ class MainActivity : ComponentActivity() {
                                 smartBanner = smartBanner,
                                 preferences = preferences,
                                 historyCount = historyList.size,
+                                recentHistory = historyList.take(5),
+                                batchQueue = batchQueue,
+                                isBatchRunning = isBatchRunning,
                                 onInputTextChange = viewModel::updateInputText,
                                 onClearInput = viewModel::clearInput,
+                                onPasteFromClipboard = { viewModel.pasteFromClipboard(context) },
                                 onPasteAndParse = { viewModel.pasteAndParse(context) },
+                                onBatchParse = { viewModel.startBatchParse() },
+                                onSelectBatchEntry = viewModel::selectBatchEntry,
+                                onDismissBatchQueue = viewModel::dismissBatchQueue,
                                 onAcceptSmartBanner = viewModel::acceptSmartPasteBanner,
                                 onDismissSmartBanner = viewModel::dismissSmartPasteBanner,
                                 onToggleSelectItem = viewModel::toggleItemSelection,
@@ -152,6 +177,9 @@ class MainActivity : ComponentActivity() {
                                 onDownloadSelected = {
                                     viewModel.downloadSelectedMedia(context)
                                 },
+                                onDownloadSingleItem = { item ->
+                                    viewModel.downloadSingleMediaItem(context, item)
+                                },
                                 onSaveBgm = { viewModel.saveBgmAudio(context) },
                                 onSaveCompanionImage = { isAvatar ->
                                     viewModel.saveCompanionImage(context, isAvatar)
@@ -159,15 +187,24 @@ class MainActivity : ComponentActivity() {
                                 onCopyText = { label, text ->
                                     viewModel.copyTextToClipboard(context, label, text)
                                 },
+                                onRefreshCurrentPost = viewModel::refreshCurrentPost,
+                                onRestoreHistoryItem = viewModel::restoreFromHistory,
+                                onSelectLivePhotoMode = viewModel::setLivePhotoExportMode,
                                 onOpenHistory = { showHistorySheet = true },
                                 onOpenSettings = { showSettingsSheet = true },
+                                onOpenTools = { showToolsSheet = true },
+                                onOpenPlatforms = { showPlatformsSheet = true },
                                 onOpenWebViewAssist = { viewModel.openWebViewAssist() }
                             )
 
                             1 -> GalleryScreen(
                                 downloadedMedia = downloadedMedia,
                                 onDeleteSelectedIds = viewModel::deleteDownloadedMediaBatch,
-                                onJumpToWorkbench = { selectedTab = 0 }
+                                onJumpToWorkbench = { selectedTab = 0 },
+                                onOpenTools = { showToolsSheet = true },
+                                onCopyText = { label, text ->
+                                    viewModel.copyTextToClipboard(context, label, text)
+                                }
                             )
                         }
 
@@ -200,6 +237,10 @@ class MainActivity : ComponentActivity() {
                                 viewModel.restoreFromHistory(record)
                                 selectedTab = 0
                             },
+                            onRefreshRecord = { record ->
+                                viewModel.refreshHistoryRecord(record)
+                                selectedTab = 0
+                            },
                             onDeleteRecord = viewModel::deleteHistoryItem,
                             onClearAll = viewModel::clearAllHistory
                         )
@@ -215,12 +256,34 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 内置 WebView 辅助验证弹窗
+                    // 实用离线工具箱（MD5 微调 / EXIF 清理 / 实况合成与拆包）
+                    if (showToolsSheet) {
+                        UtilityToolboxSheet(
+                            modifyMd5Default = preferences.modifyMd5Enabled,
+                            onDismiss = { showToolsSheet = false },
+                            onEntityCreated = viewModel::insertDownloadedEntity
+                        )
+                    }
+
+                    // 14+ 国内外支持平台清单与直达入口
+                    if (showPlatformsSheet) {
+                        SupportedPlatformsSheet(
+                            onDismiss = { showPlatformsSheet = false },
+                            onOpenPlatformWebView = { url ->
+                                viewModel.openWebViewAssist(url)
+                            }
+                        )
+                    }
+
+                    // 内置 WebView 辅助验证与 Cookie 同步弹窗
                     webViewAssistUrl?.let { targetUrl ->
                         WebViewAssistDialog(
                             targetUrl = targetUrl,
                             onDismiss = viewModel::closeWebViewAssist,
-                            onHtmlExtracted = viewModel::onWebViewHtmlExtracted
+                            onHtmlExtracted = viewModel::onWebViewHtmlExtracted,
+                            onSyncCookie = { url, cookieStr ->
+                                viewModel.syncCookieFromWebView(context, url, cookieStr)
+                            }
                         )
                     }
                 }
@@ -231,17 +294,30 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            viewModel.inspectClipboardOnForeground(this)
+            inspectClipboardDebounced()
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIncomingIntent(intent)
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
-        val dataStr = intent?.dataString
+        val shareExtra = intent?.getStringExtra(EXTRA_SHARE_URL)?.trim()
+        if (!shareExtra.isNullOrBlank()) {
+            viewModel.triggerParse(shareExtra)
+            return
+        }
+        if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+            if (!sharedText.isNullOrBlank()) {
+                viewModel.triggerParse(sharedText)
+                return
+            }
+        }
+        val dataStr = intent?.dataString?.trim()
         if (!dataStr.isNullOrBlank()) {
             viewModel.triggerParse(dataStr)
         }

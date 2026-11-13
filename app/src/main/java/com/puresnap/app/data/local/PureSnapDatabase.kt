@@ -25,6 +25,7 @@ abstract class PureSnapDatabase : RoomDatabase() {
                     PureSnapDatabase::class.java,
                     "puresnap_storage.db"
                 )
+                    .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

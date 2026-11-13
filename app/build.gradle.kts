@@ -13,8 +13,8 @@ android {
         applicationId = "com.puresnap.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -24,7 +24,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -72,6 +73,7 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.sqlite.ktx)
+    implementation(libs.androidx.exifinterface)
 
     // JSON & Coroutines
     implementation(libs.gson)

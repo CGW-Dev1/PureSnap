@@ -16,26 +16,20 @@ import com.puresnap.app.model.ParseErrorType
 import com.puresnap.app.model.ParsedPost
 import com.puresnap.app.model.PlatformType
 import com.puresnap.app.model.QualityBadge
-import com.puresnap.app.util.DynamicMediaRenderer
 import com.puresnap.app.util.ShareLinkExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
 import java.net.URLDecoder
 import java.util.regex.Pattern
 
 /**
- * 真实多平台无水印原图/视频解析引擎（基于 Gson JsonParser 深度状态树解析 + 后台 WebView 动态嗅探）
+ * 多平台无水印原图/实况/视频解析调度引擎：
+ * - 第一层：直链原文件快速直出 + 国内外 14 大平台原生 JSON/API 状态树直连解析
+ * - 第二层：后台无感 Chromium WebView 动态绕过 WAF/JS 挑战并提取全网状态树与网络流
  */
 object MultiPlatformParserEngine {
 
     private val gson = Gson()
-
-    private const val MOBILE_UA =
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 
     sealed class ParseOutcome {
         data class Success(val post: ParsedPost) : ParseOutcome()
@@ -45,12 +39,6 @@ object MultiPlatformParserEngine {
             val platform: PlatformType = PlatformType.UNKNOWN
         ) : ParseOutcome()
     }
-
-    private data class HttpPageResponse(
-        val finalUrl: String,
-        val html: String,
-        val statusCode: Int
-    )
 
     suspend fun parseShareInput(
         context: Context,
@@ -70,15 +58,21 @@ object MultiPlatformParserEngine {
             )
         }
 
-        val platform = if (extraction.platform == PlatformType.UNKNOWN) {
-            PlatformType.XIAOHONGSHU
-        } else {
-            extraction.platform
-        }
-
+        val platform = extraction.platform
         val customCookie = preferences.cookieForPlatform(platform)
 
-        // 第一层：客户端直连 HTTP 重定向追踪 + 页面状态树解析
+        // 快速通道：直接复制的图片/视频直链，直接升级原图直出，免网页解析等待
+        if (ShareLinkExtractor.isDirectMediaUrl(cleanUrl)) {
+            buildDirectMediaPost(
+                rawInput = rawInput,
+                cleanUrl = cleanUrl,
+                platform = platform,
+                preferences = preferences,
+                previousHistory = previousHistory
+            )?.let { return@withContext ParseOutcome.Success(it) }
+        }
+
+        // 第一层：客户端直连 HTTP 重定向追踪 + 多平台结构化 API / HTML 状态树解析
         val directPost = tryDirectHttpExtraction(
             rawInput = rawInput,
             cleanUrl = cleanUrl,
@@ -91,12 +85,12 @@ object MultiPlatformParserEngine {
             return@withContext ParseOutcome.Success(directPost)
         }
 
-        // 第二层：后台无感 Chromium WebView 动态执行 JS 绕过 WAF 签名挑战并提取 _ROUTER_DATA / __INITIAL_STATE__
+        // 第二层：后台无感 Chromium WebView 动态执行 JS 绕过挑战并提取状态树与媒体资源
         val sniffResult = HiddenWebViewExtractor.sniffUrl(
             context = context,
             targetUrl = cleanUrl,
             customCookie = customCookie,
-            timeoutMs = 9000L
+            timeoutMs = 8500L
         )
         if (sniffResult != null) {
             val webParsed = parseFromWebSniffResult(
@@ -112,6 +106,36 @@ object MultiPlatformParserEngine {
             }
         }
 
+        // 第三层（抖音移动端分享页降级兜底）：当 iesdouyin.com 返回空白/错误兜底页时，转用桌面端 note 页抓取无水印原图
+        if (platform == PlatformType.DOUYIN) {
+            val awemeId = extractDouyinAwemeId(
+                sniffResult?.finalUrl?.ifBlank { cleanUrl } ?: cleanUrl,
+                sniffResult?.rawHtml ?: ""
+            )
+            if (!awemeId.isNullOrBlank()) {
+                val desktopSniff = HiddenWebViewExtractor.sniffUrl(
+                    context = context,
+                    targetUrl = "https://www.douyin.com/note/$awemeId",
+                    customCookie = customCookie,
+                    timeoutMs = 9500L,
+                    useDesktopUa = true
+                )
+                if (desktopSniff != null) {
+                    val desktopParsed = parseFromWebSniffResult(
+                        rawInput = rawInput,
+                        cleanUrl = cleanUrl,
+                        platform = platform,
+                        sniff = desktopSniff,
+                        preferences = preferences,
+                        previousHistory = previousHistory
+                    )
+                    if (desktopParsed != null && desktopParsed.mediaItems.isNotEmpty()) {
+                        return@withContext ParseOutcome.Success(desktopParsed)
+                    }
+                }
+            }
+        }
+
         ParseOutcome.Failure(
             errorType = ParseErrorType.ANTI_SCRAPE_TIMEOUT,
             extractedUrl = cleanUrl,
@@ -124,13 +148,11 @@ object MultiPlatformParserEngine {
         html: String,
         preferences: UserPreferencesState
     ): ParsedPost? {
-        val platform = ShareLinkExtractor.detectPlatform(url, url).let {
-            if (it == PlatformType.UNKNOWN) PlatformType.XIAOHONGSHU else it
-        }
+        val platform = ShareLinkExtractor.detectPlatform(url, url)
         val workId = ShareLinkExtractor.extractWorkId(url, platform)
 
-        if (platform == PlatformType.DOUYIN) {
-            parseDouyinHtmlState(
+        when (platform) {
+            PlatformType.DOUYIN -> parseDouyinHtmlState(
                 rawInput = url,
                 cleanUrl = url,
                 finalUrl = url,
@@ -138,10 +160,8 @@ object MultiPlatformParserEngine {
                 workId = workId,
                 previousHistory = null
             )?.let { return it }
-        }
 
-        if (platform == PlatformType.XIAOHONGSHU) {
-            parseXiaohongshuHtmlState(
+            PlatformType.XIAOHONGSHU -> parseXiaohongshuHtmlState(
                 rawInput = url,
                 cleanUrl = url,
                 finalUrl = url,
@@ -150,26 +170,62 @@ object MultiPlatformParserEngine {
                 preferences = preferences,
                 previousHistory = null
             )?.let { return it }
-        }
 
-        if (platform == PlatformType.KUAISHOU) {
-            parseKuaishouHtmlState(
-                rawInput = url,
-                cleanUrl = url,
-                finalUrl = url,
-                html = html,
-                workId = workId,
-                previousHistory = null
-            )?.let { return it }
+            PlatformType.KUAISHOU -> {
+                parseKuaishouHtmlState(url, url, url, html, workId, null)?.let { return it }
+                parseKuaishouRegexSniff(url, url, url, html, workId, null)?.let { return it }
+            }
 
-            parseKuaishouRegexSniff(
-                rawInput = url,
-                cleanUrl = url,
-                finalUrl = url,
-                html = html,
-                workId = workId,
-                previousHistory = null
-            )?.let { return it }
+            PlatformType.WEIBO -> {
+                val json = extractBalancedJsonObject(html, "\"status\":")
+                    ?: extractBalancedJsonObject(html, "var \$render_data =")
+                if (json != null) {
+                    DomesticExtPlatformParsers.parseWeiboStatusJson(url, url, url, json, workId)?.let { return it }
+                }
+            }
+
+            PlatformType.BILIBILI -> {
+                val dynJson = extractBalancedJsonObject(html, "window.__INITIAL_STATE__=")
+                    ?: extractBalancedJsonObject(html, "__INITIAL_STATE__ =")
+                if (dynJson != null) {
+                    DomesticExtPlatformParsers.parseBilibiliDynamicJson(url, url, dynJson, workId)?.let { return it }
+                }
+            }
+
+            PlatformType.ZUIYOU -> {
+                val zyJson = extractBalancedJsonObject(html, "__INITIAL_STATE__")
+                if (zyJson != null) {
+                    DomesticExtPlatformParsers.parseZuiyouJson(url, url, zyJson, workId)?.let { return it }
+                }
+            }
+
+            PlatformType.INSTAGRAM -> {
+                InternationalPlatformParsers.parseInstagramHtmlOrJson(url, url, html, workId)?.let { return it }
+            }
+
+            PlatformType.TIKTOK -> {
+                InternationalPlatformParsers.parseTikTokHtmlState(url, url, html)?.let { return it }
+            }
+
+            PlatformType.THREADS -> {
+                InternationalPlatformParsers.parseThreadsHtml(url, url, html)?.let { return it }
+            }
+
+            PlatformType.PINTEREST -> {
+                val pws = extractBalancedJsonObject(html, "__PWS_DATA__")
+                if (pws != null) {
+                    InternationalPlatformParsers.parsePinterestPwsJson(url, url, pws, workId)?.let { return it }
+                }
+            }
+
+            PlatformType.YOUTUBE -> {
+                val player = extractBalancedJsonObject(html, "ytInitialPlayerResponse =")
+                if (player != null) {
+                    InternationalPlatformParsers.parseYouTubePlayerJson(url, url, player, workId)?.let { return it }
+                }
+            }
+
+            else -> Unit
         }
 
         return parseGenericHtmlMetaAndDom(
@@ -188,19 +244,14 @@ object MultiPlatformParserEngine {
         platform: PlatformType,
         xhsCdnBase: String = "https://ci.xiaohongshu.com/"
     ): String {
-        val httpsUrl = rawMediaUrl.replace("\\u002F", "/").replace("http://", "https://").trim()
+        val httpsUrl = ParserSupport.normalizeMediaUrl(rawMediaUrl)
         return when (platform) {
             PlatformType.XIAOHONGSHU -> {
-                val noQuery = httpsUrl.substringBefore("?").substringBefore("!")
-                val afterDomain = noQuery.substringAfter(".com/", "")
-                val strippedTimestampHash = afterDomain.replace(
-                    Regex("""^\d{10,14}/[0-9a-fA-F]{24,40}/"""),
-                    ""
-                )
-                val key = strippedTimestampHash.ifBlank { noQuery.substringAfterLast("/") }
+                val key = extractXhsObjectKey(httpsUrl)
                 val normalizedBase = if (xhsCdnBase.endsWith("/")) xhsCdnBase else "$xhsCdnBase/"
                 "${normalizedBase}${key}?imageView2/2/w/0/format/png"
             }
+
             PlatformType.DOUYIN -> {
                 val replaced = httpsUrl
                     .replace("/playwm/", "/play/")
@@ -216,21 +267,108 @@ object MultiPlatformParserEngine {
                     replaced
                 }
             }
+
             PlatformType.ZUIYOU -> {
                 httpsUrl
                     .replace("/watermarked", "/origin")
                     .replace("watermarked", "origin")
                     .substringBefore("?x-oss-process")
             }
+
             PlatformType.KUAISHOU -> {
-                // 快手无损原图直出：剥离客户端截断参数与压缩格式转换，保留原生 4K/超清原图
                 httpsUrl
                     .replace(Regex("""[?&]bp=\d+"""), "")
                     .replace(Regex("""[?&]format=webp"""), "")
                     .replace(Regex("""_webp\b"""), "")
             }
+
+            PlatformType.WEIBO -> DomesticExtPlatformParsers.rewriteWeiboOriginUrl(httpsUrl)
+            PlatformType.BILIBILI -> DomesticExtPlatformParsers.rewriteBilibiliOriginUrl(httpsUrl)
+            PlatformType.TWITTER -> InternationalPlatformParsers.rewriteTwitterOrigUrl(httpsUrl)
+            PlatformType.PINTEREST -> InternationalPlatformParsers.rewritePinterestOriginUrl(httpsUrl)
             else -> httpsUrl.substringBefore("?x-oss-process")
         }
+    }
+
+    private fun extractXhsObjectKey(httpsUrl: String): String {
+        val noQuery = httpsUrl.substringBefore("?").substringBefore("!")
+        val afterDomain = noQuery.substringAfter(".com/", "")
+        val strippedTimestampHash = afterDomain.replace(
+            Regex("""^\d{10,14}/[0-9a-fA-F]{24,40}/"""),
+            ""
+        )
+        return strippedTimestampHash.ifBlank { noQuery.substringAfterLast("/") }
+    }
+
+    private fun buildDirectMediaPost(
+        rawInput: String,
+        cleanUrl: String,
+        platform: PlatformType,
+        preferences: UserPreferencesState,
+        previousHistory: ParseHistoryEntity?
+    ): ParsedPost? {
+        val resolvedPlatform = if (platform == PlatformType.UNKNOWN) {
+            ShareLinkExtractor.detectPlatform(cleanUrl, cleanUrl)
+        } else platform
+        val workId = ShareLinkExtractor.extractWorkId(cleanUrl, resolvedPlatform)
+        val lower = cleanUrl.substringBefore('?').lowercase()
+        val isVideo = lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".m4v")
+        val orig = rewriteToLosslessOriginUrl(cleanUrl, resolvedPlatform, preferences.xhsCdnHostRule)
+
+        val item = if (isVideo) {
+            MediaItem(
+                id = "${workId}_direct_vid",
+                index = 0,
+                kind = MediaKind.VIDEO,
+                badge = QualityBadge.VIDEO_HD,
+                originUrl = orig,
+                previewUrl = cleanUrl,
+                fallbackUrls = listOf(orig, cleanUrl).distinct(),
+                width = 1080,
+                height = 1920,
+                format = "MP4",
+                colorSpace = "BT.709",
+                themeTitle = "直链高清视频"
+            )
+        } else {
+            val rawXhs = if (resolvedPlatform == PlatformType.XIAOHONGSHU) {
+                val base = preferences.xhsCdnHostRule.let { if (it.endsWith("/")) it else "$it/" }
+                "${base}${extractXhsObjectKey(cleanUrl)}"
+            } else null
+            MediaItem(
+                id = "${workId}_direct_img",
+                index = 0,
+                kind = MediaKind.IMAGE,
+                badge = QualityBadge.RAW,
+                originUrl = orig,
+                previewUrl = cleanUrl,
+                fallbackUrls = listOfNotNull(rawXhs, orig, cleanUrl).distinct(),
+                width = 2000,
+                height = 2000,
+                format = ParserSupport.detectImageFormat(orig, "JPG"),
+                colorSpace = "Display P3",
+                themeTitle = "无损原图直链"
+            )
+        }
+
+        val post = ParsedPost(
+            id = "direct_$workId",
+            sourceShareText = rawInput,
+            extractedUrl = cleanUrl,
+            noteId = workId,
+            platform = resolvedPlatform,
+            postTypeLabel = "${resolvedPlatform.displayName} · 直链原文件",
+            authorName = resolvedPlatform.displayName,
+            authorHandle = "@direct",
+            authorAvatarUrl = "",
+            coverUrl = item.previewUrl,
+            title = cleanUrl.substringAfterLast('/').substringBefore('?').ifBlank { "原文件直链 #$workId" },
+            content = cleanUrl,
+            tags = emptyList(),
+            mediaItems = listOf(item),
+            parseEngineSource = "直链极速引擎 · CDN 零重压"
+        )
+        return ParserSupport.applyDuplicateInfo(post, previousHistory)
     }
 
     private fun tryDirectHttpExtraction(
@@ -241,7 +379,39 @@ object MultiPlatformParserEngine {
         customCookie: String?,
         previousHistory: ParseHistoryEntity?
     ): ParsedPost? {
-        val page = fetchPageFollowingRedirects(cleanUrl, platform, customCookie) ?: return null
+        // 国内拓展平台：微博、B站、最右、皮皮虾
+        when (platform) {
+            PlatformType.WEIBO, PlatformType.BILIBILI, PlatformType.ZUIYOU, PlatformType.PIPIXIA -> {
+                DomesticExtPlatformParsers.parseDirect(
+                    rawInput = rawInput,
+                    cleanUrl = cleanUrl,
+                    platform = platform,
+                    customCookie = customCookie,
+                    previousHistory = previousHistory
+                )?.let { return it }
+            }
+
+            // 国外主流平台：X/Twitter、Instagram、TikTok、Threads、Pinterest、YouTube、Reddit
+            PlatformType.TWITTER,
+            PlatformType.INSTAGRAM,
+            PlatformType.TIKTOK,
+            PlatformType.THREADS,
+            PlatformType.PINTEREST,
+            PlatformType.YOUTUBE,
+            PlatformType.REDDIT -> {
+                InternationalPlatformParsers.parseDirect(
+                    rawInput = rawInput,
+                    cleanUrl = cleanUrl,
+                    platform = platform,
+                    customCookie = customCookie,
+                    previousHistory = previousHistory
+                )?.let { return it }
+            }
+
+            else -> Unit
+        }
+
+        val page = ParserSupport.followRedirectsAndFetch(cleanUrl, platform, customCookie) ?: return null
         val workId = ShareLinkExtractor.extractWorkId(page.finalUrl.ifBlank { cleanUrl }, platform)
 
         return when (platform) {
@@ -258,7 +428,7 @@ object MultiPlatformParserEngine {
                     if (!awemeId.isNullOrBlank()) {
                         for (pathType in listOf("video", "note", "slides")) {
                             val shareUrl = "https://www.iesdouyin.com/share/$pathType/$awemeId/"
-                            val sharePage = fetchPageFollowingRedirects(shareUrl, PlatformType.DOUYIN, customCookie)
+                            val sharePage = ParserSupport.followRedirectsAndFetch(shareUrl, PlatformType.DOUYIN, customCookie)
                             if (sharePage != null && sharePage.html.isNotBlank()) {
                                 val parsed = parseDouyinHtmlState(
                                     rawInput = rawInput,
@@ -271,6 +441,26 @@ object MultiPlatformParserEngine {
                                 if (parsed != null && parsed.mediaItems.isNotEmpty()) {
                                     return@run parsed
                                 }
+                            }
+                        }
+                        val desktopUrl = "https://www.douyin.com/note/$awemeId"
+                        val desktopPage = ParserSupport.followRedirectsAndFetch(
+                            startUrl = desktopUrl,
+                            platform = PlatformType.DOUYIN,
+                            customCookie = customCookie,
+                            userAgent = ParserSupport.DESKTOP_UA
+                        )
+                        if (desktopPage != null && desktopPage.html.isNotBlank()) {
+                            val parsed = parseDouyinHtmlState(
+                                rawInput = rawInput,
+                                cleanUrl = cleanUrl,
+                                finalUrl = desktopPage.finalUrl,
+                                html = desktopPage.html,
+                                workId = awemeId,
+                                previousHistory = previousHistory
+                            )
+                            if (parsed != null && parsed.mediaItems.isNotEmpty()) {
+                                return@run parsed
                             }
                         }
                     }
@@ -291,7 +481,6 @@ object MultiPlatformParserEngine {
             }
 
             PlatformType.KUAISHOU -> {
-                // 快手多级直连解析：状态树 INIT_STATE -> 正则嗅探兜底
                 parseKuaishouHtmlState(
                     rawInput = rawInput,
                     cleanUrl = cleanUrl,
@@ -323,6 +512,10 @@ object MultiPlatformParserEngine {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 抖音解析：原图 + 精准 Live 实况识别 + 最高码率 MP4 视频
+    // ════════════════════════════════════════════════════════════════
+
     private fun parseDouyinHtmlState(
         rawInput: String,
         cleanUrl: String,
@@ -331,20 +524,23 @@ object MultiPlatformParserEngine {
         workId: String,
         previousHistory: ParseHistoryEntity?
     ): ParsedPost? {
-        val routerJsonStr = extractBalancedJsonObject(html, "window._ROUTER_DATA")
-            ?: extractBalancedJsonObject(html, "window._SSR_DATA")
-            ?: extractRenderDataJson(html)
-
-        if (!routerJsonStr.isNullOrBlank()) {
+        val candidates = listOfNotNull(
+            extractBalancedJsonObject(html, "_ROUTER_DATA ="),
+            extractBalancedJsonObject(html, "_ROUTER_DATA="),
+            extractRenderDataJson(html),
+            extractDouyinPacePayloadJson(html),
+            extractBalancedJsonObject(html, "\"detail\":{"),
+            extractBalancedJsonObject(html, "\"aweme_detail\":")
+        )
+        for (jsonStr in candidates) {
             parseDouyinRouterJson(
                 rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                routerJsonStr = routerJsonStr,
+                cleanUrl = cleanUrl.ifBlank { finalUrl },
+                routerJsonStr = jsonStr,
                 fallbackWorkId = workId,
                 previousHistory = previousHistory
             )?.let { return it }
         }
-
         return null
     }
 
@@ -359,85 +555,135 @@ object MultiPlatformParserEngine {
             val root = JsonParser.parseString(routerJsonStr)
             val itemObj = findDouyinAwemeItemObject(root) ?: return null
 
-            val awemeId = itemObj.optStr("aweme_id").ifBlank { fallbackWorkId }
+            val awemeId = itemObj.optStr("aweme_id").ifBlank { itemObj.optStr("awemeId") }.ifBlank { fallbackWorkId }
             val desc = itemObj.optStr("desc").trim()
 
-            val authorObj = itemObj.optObj("author")
+            val authorObj = itemObj.optObj("author") ?: itemObj.optObj("authorInfo")
             val authorName = authorObj?.optStr("nickname")?.takeIf { it.isNotBlank() } ?: "抖音创作者"
             val authorHandle = authorObj?.optStr("unique_id")?.takeIf { it.isNotBlank() }
+                ?: authorObj?.optStr("uniqueId")?.takeIf { it.isNotBlank() }
                 ?: authorObj?.optStr("short_id")?.takeIf { it.isNotBlank() }
+                ?: authorObj?.optStr("uid")?.takeIf { it.isNotBlank() }
                 ?: awemeId.take(8)
             val avatarUrl = extractFirstUrlFromHolder(authorObj?.optObj("avatar_larger"))
+                ?: extractFirstUrlFromHolder(authorObj?.optObj("avatarLarger"))
                 ?: extractFirstUrlFromHolder(authorObj?.optObj("avatar_medium"))
+                ?: extractFirstUrlFromHolder(authorObj?.optObj("avatarMedium"))
                 ?: extractFirstUrlFromHolder(authorObj?.optObj("avatar_thumb"))
+                ?: extractFirstUrlFromHolder(authorObj?.optObj("avatarThumb"))
+                ?: authorObj?.optStr("avatarUri")?.takeIf { it.startsWith("http") }
                 ?: ""
 
-            val tags = extractHashtags(desc, itemObj.optArr("text_extra"))
-
+            val tags = extractHashtags(desc, itemObj.optArr("text_extra") ?: itemObj.optArr("textExtra"))
             val mediaItems = mutableListOf<MediaItem>()
+
             val imagesArr = itemObj.optArr("images")
                 ?: itemObj.optObj("image_post_info")?.optArr("images")
                 ?: itemObj.optArr("image_list")
                 ?: itemObj.optObj("image_album")?.optArr("images")
+                ?: itemObj.optArr("imageInfos")
 
             val rootVideoObj = itemObj.optObj("video")
-            val rootLiveVideoUrl = rootVideoObj?.optObj("play_addr")?.let { playAddr ->
-                extractFirstUrlFromArray(playAddr.optArr("url_list"))
-                    ?: extractFirstUrlFromArray(rootVideoObj.optArr("play_addr_h264"))
-            }?.let { rewriteToLosslessOriginUrl(it, PlatformType.DOUYIN) }
-                ?: rootVideoObj?.optStr("uri")?.takeIf { it.isNotBlank() }?.let {
-                    "https://aweme.snssdk.com/aweme/v1/play/?video_id=$it&ratio=1080p&line=0"
-                }
+            val rootLiveVideoUrl = extractBestDouyinVideoUrl(rootVideoObj)
 
             if (imagesArr != null && imagesArr.size() > 0) {
+                val postExplicitLive = itemObj.optBool("is_live_photo", false) ||
+                    itemObj.optBool("is_live", false) ||
+                    itemObj.optBool("isLivePhoto", false)
+
                 for (i in 0 until imagesArr.size()) {
                     val imgObj = imagesArr.get(i).takeIf { it.isJsonObject }?.asJsonObject ?: continue
-                    val candidateImageArrays = listOfNotNull(
-                        imgObj.optObj("display_image")?.optArr("url_list"),
-                        imgObj.optObj("origin_image")?.optArr("url_list"),
-                        imgObj.optObj("original_image")?.optArr("url_list"),
-                        imgObj.optObj("download_image")?.optArr("url_list"),
+                    // 严格优先无水印原图字段（origin_image / display_image / url_list / urlList）；
+                    // 抖音 _ROUTER_DATA / __pace_f 的 download_url_list / downloadUrlList 往往带有“抖音号：xxx”底部水印，必须跳过！
+                    val cleanImageArrays = listOfNotNull(
+                        imgObj.optArr("watermark_free_download_url_list"),
+                        imgObj.optArr("watermarkFreeDownloadUrlList"),
+                        imgObj.optObj("origin_image")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                        imgObj.optObj("originImage")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                        imgObj.optObj("original_image")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                        imgObj.optObj("originalImage")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                        imgObj.optObj("display_image")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                        imgObj.optObj("displayImage")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
                         imgObj.optArr("url_list"),
-                        imgObj.optArr("download_url_list"),
-                        imgObj.optObj("thumbnail_image")?.optArr("url_list"),
-                        imgObj.optObj("live_photo")?.optObj("cover")?.optArr("url_list")
+                        imgObj.optArr("urlList"),
+                        imgObj.optObj("live_photo")?.optObj("cover")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                        imgObj.optObj("livePhoto")?.optObj("cover")?.let { it.optArr("url_list") ?: it.optArr("urlList") }
                     )
 
                     var bestOriginUrl: String? = null
-                    for (arr in candidateImageArrays) {
-                        val best = selectBestDouyinImageUrl(arr)
-                        if (!best.isNullOrBlank()) {
-                            bestOriginUrl = best
-                            break
+                    val collectedAll = linkedSetOf<String>()
+                    for (arr in cleanImageArrays) {
+                        selectBestDouyinImageUrl(arr)?.let { best ->
+                            if (bestOriginUrl == null) bestOriginUrl = best
+                            collectedAll.add(best)
+                        }
+                        collectCleanDouyinImageUrls(arr).forEach { collectedAll.add(it) }
+                    }
+                    // 仅当无水印字段完全缺失时，才兜底读取缩略图或过滤后的 download_url_list
+                    if (bestOriginUrl.isNullOrBlank()) {
+                        val fallbackArrays = listOfNotNull(
+                            imgObj.optObj("thumbnail_image")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                            imgObj.optObj("thumbnailImage")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                            imgObj.optObj("download_image")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                            imgObj.optObj("downloadImage")?.let { it.optArr("url_list") ?: it.optArr("urlList") },
+                            imgObj.optArr("download_url_list"),
+                            imgObj.optArr("downloadUrlList")
+                        )
+                        for (arr in fallbackArrays) {
+                            selectBestDouyinImageUrl(arr)?.let { best ->
+                                if (bestOriginUrl == null) bestOriginUrl = best
+                                collectedAll.add(best)
+                            }
                         }
                     }
                     if (bestOriginUrl.isNullOrBlank()) {
-                        bestOriginUrl = candidateImageArrays.firstNotNullOfOrNull { extractFirstUrlFromArray(it) }
-                            ?: continue
+                        bestOriginUrl = collectedAll.firstOrNull() ?: continue
                     }
-                    val previewUrl = candidateImageArrays.firstNotNullOfOrNull { extractFirstUrlFromArray(it) } ?: bestOriginUrl
+                    val previewUrl = cleanImageArrays.firstNotNullOfOrNull { selectBestDouyinImageUrl(it) }
+                        ?: collectedAll.firstOrNull()
+                        ?: bestOriginUrl
 
+                    // 精准提取单张图对应的实况视频轨（避免将普通图集的 BGM 幻灯片误判为实况）
+                    val slideLiveVideoUrl = extractBestDouyinVideoUrl(imgObj.optObj("video"))
+                        ?: extractBestDouyinVideoUrl(imgObj.optObj("clip_video"))
+                        ?: extractBestDouyinVideoUrl(imgObj.optObj("clipVideo"))
+                        ?: extractBestDouyinVideoUrl(imgObj.optObj("live_photo")?.optObj("video"))
+                        ?: extractBestDouyinVideoUrl(imgObj.optObj("livePhoto")?.optObj("video"))
+                        ?: extractBestDouyinVideoUrl(imgObj.optObj("live_photo"))
+                        ?: if (imagesArr.size() == 1 && (postExplicitLive || imgObj.optBool("is_live", false))) {
+                            rootLiveVideoUrl
+                        } else null
+
+                    val isLive = !slideLiveVideoUrl.isNullOrBlank()
+                    val resLog = imgObj.optObj("resolution_log_param")
                     val w = imgObj.optInt("width", 0).takeIf { it > 0 }
-                        ?: imgObj.optObj("display_image")?.optInt("width", 0)?.takeIf { it > 0 }
+                        ?: resLog?.optInt("image_source_width", 0)?.takeIf { it > 0 }
                         ?: imgObj.optObj("origin_image")?.optInt("width", 0)?.takeIf { it > 0 }
+                        ?: imgObj.optObj("display_image")?.optInt("width", 0)?.takeIf { it > 0 }
                         ?: 1080
                     val h = imgObj.optInt("height", 0).takeIf { it > 0 }
-                        ?: imgObj.optObj("display_image")?.optInt("height", 0)?.takeIf { it > 0 }
+                        ?: resLog?.optInt("image_source_height", 0)?.takeIf { it > 0 }
                         ?: imgObj.optObj("origin_image")?.optInt("height", 0)?.takeIf { it > 0 }
+                        ?: imgObj.optObj("display_image")?.optInt("height", 0)?.takeIf { it > 0 }
                         ?: 1440
 
                     val is4K = w >= 2160 || h >= 2160
-                    val fmt = if (bestOriginUrl.lowercase().contains(".webp")) "WEBP" else "JPG"
+                    val fmt = ParserSupport.detectImageFormat(bestOriginUrl!!, "JPG")
 
                     mediaItems.add(
                         MediaItem(
                             id = "${awemeId}_dy_img_$i",
                             index = i,
-                            kind = MediaKind.IMAGE,
-                            badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
-                            originUrl = bestOriginUrl,
+                            kind = if (isLive) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,
+                            badge = when {
+                                isLive -> QualityBadge.LIVE
+                                is4K -> QualityBadge.FOUR_K
+                                else -> QualityBadge.RAW
+                            },
+                            originUrl = bestOriginUrl!!,
                             previewUrl = previewUrl,
-                            liveVideoUrl = null,
+                            liveVideoUrl = slideLiveVideoUrl,
+                            fallbackUrls = collectedAll.toList(),
                             width = w,
                             height = h,
                             format = fmt,
@@ -449,55 +695,43 @@ object MultiPlatformParserEngine {
                 }
             }
 
-            if (mediaItems.isEmpty()) {
-                val videoObj = itemObj.optObj("video")
-                if (videoObj != null) {
-                    val playAddr = videoObj.optObj("play_addr")
-                    val uri = playAddr?.optStr("uri") ?: ""
-                    val rawPlayUrl = extractFirstUrlFromArray(playAddr?.optArr("url_list"))
+            if (mediaItems.isEmpty() && rootVideoObj != null) {
+                val losslessVideoUrl = rootLiveVideoUrl
+                val coverUrl = extractFirstUrlFromHolder(rootVideoObj.optObj("origin_cover"))
+                    ?: extractFirstUrlFromHolder(rootVideoObj.optObj("cover"))
+                    ?: extractFirstUrlFromHolder(rootVideoObj.optObj("dynamic_cover"))
+                    ?: ""
 
-                    val losslessVideoUrl = when {
-                        !rawPlayUrl.isNullOrBlank() -> rewriteToLosslessOriginUrl(rawPlayUrl, PlatformType.DOUYIN)
-                        uri.isNotBlank() -> "https://aweme.snssdk.com/aweme/v1/play/?video_id=$uri&ratio=1080p&line=0"
-                        else -> null
-                    }
+                val w = rootVideoObj.optInt("width", 1080).coerceAtLeast(720)
+                val h = rootVideoObj.optInt("height", 1920).coerceAtLeast(1280)
+                val durationMs = rootVideoObj.optLong("duration", 0L)
 
-                    val coverUrl = extractFirstUrlFromHolder(videoObj.optObj("origin_cover"))
-                        ?: extractFirstUrlFromHolder(videoObj.optObj("cover"))
-                        ?: extractFirstUrlFromHolder(videoObj.optObj("dynamic_cover"))
-                        ?: ""
-
-                    val w = videoObj.optInt("width", 1080).coerceAtLeast(720)
-                    val h = videoObj.optInt("height", 1920).coerceAtLeast(1280)
-
-                    if (!losslessVideoUrl.isNullOrBlank()) {
-                        mediaItems.add(
-                            MediaItem(
-                                id = "${awemeId}_dy_vid_0",
-                                index = 0,
-                                kind = MediaKind.VIDEO,
-                                badge = if (w >= 2160 || h >= 2160) QualityBadge.FOUR_K else QualityBadge.VIDEO_HD,
-                                originUrl = losslessVideoUrl,
-                                previewUrl = coverUrl.ifBlank { losslessVideoUrl },
-                                liveVideoUrl = if (uri.isNotBlank()) {
-                                    "https://aweme.snssdk.com/aweme/v1/play/?video_id=$uri&ratio=1080p&line=0"
-                                } else losslessVideoUrl,
-                                width = w,
-                                height = h,
-                                format = "MP4",
-                                colorSpace = "BT.709",
-                                themeTitle = desc,
-                                visualSeed = 0
-                            )
+                if (!losslessVideoUrl.isNullOrBlank()) {
+                    mediaItems.add(
+                        MediaItem(
+                            id = "${awemeId}_dy_vid_0",
+                            index = 0,
+                            kind = MediaKind.VIDEO,
+                            badge = if (w >= 2160 || h >= 2160) QualityBadge.FOUR_K else QualityBadge.VIDEO_HD,
+                            originUrl = losslessVideoUrl,
+                            previewUrl = coverUrl.ifBlank { losslessVideoUrl },
+                            liveVideoUrl = losslessVideoUrl,
+                            width = w,
+                            height = h,
+                            format = "MP4",
+                            colorSpace = "BT.709",
+                            durationMs = durationMs,
+                            themeTitle = desc,
+                            visualSeed = 0
                         )
-                    }
+                    )
                 }
             }
 
             if (mediaItems.isEmpty()) return null
 
             val musicObj = itemObj.optObj("music")
-            val bgmUrl = extractFirstUrlFromHolder(musicObj?.optObj("play_url"))
+            val bgmUrl = extractFirstUrlFromHolder(musicObj?.optObj("play_url") ?: musicObj?.optObj("playUrl"))
             val bgmAudio = if (!bgmUrl.isNullOrBlank()) {
                 AudioTrackInfo(
                     id = "bgm_$awemeId",
@@ -510,10 +744,10 @@ object MultiPlatformParserEngine {
             } else null
 
             val postTypeLabel = when {
+                mediaItems.any { it.isLivePhoto } -> "抖音·实况图"
                 mediaItems.any { it.isVideo } -> "抖音·视频"
                 else -> "抖音·图集"
             }
-            val coverUrl = mediaItems.first().previewUrl
 
             ParsedPost(
                 id = "post_$awemeId",
@@ -525,7 +759,7 @@ object MultiPlatformParserEngine {
                 authorName = authorName,
                 authorHandle = "@$authorHandle",
                 authorAvatarUrl = avatarUrl,
-                coverUrl = coverUrl,
+                coverUrl = mediaItems.first().previewUrl,
                 title = desc.lineSequence().firstOrNull()?.take(80) ?: "",
                 content = desc,
                 tags = tags,
@@ -540,6 +774,44 @@ object MultiPlatformParserEngine {
         }
     }
 
+    private fun extractBestDouyinVideoUrl(videoObj: JsonObject?): String? {
+        if (videoObj == null) return null
+        // 优先从 bit_rate / bitRateList 数组选出最高码率无水印视频流
+        val bitRateArr = videoObj.optArr("bit_rate") ?: videoObj.optArr("bitRateList")
+        var bestBitrate = -1L
+        var bestBrUrl: String? = null
+        bitRateArr?.forEach { el ->
+            val brObj = el.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+            val br = brObj.optLong("bit_rate", 0L).takeIf { it > 0L } ?: brObj.optLong("bitRate", 0L)
+            val holder = brObj.optObj("play_addr") ?: brObj.optObj("playAddr")
+            val u = extractFirstUrlFromHolder(holder)
+            if (!u.isNullOrBlank() && br >= bestBitrate) {
+                bestBitrate = br
+                bestBrUrl = u
+            }
+        }
+        if (!bestBrUrl.isNullOrBlank()) {
+            return rewriteToLosslessOriginUrl(bestBrUrl!!, PlatformType.DOUYIN)
+        }
+
+        val playAddr = videoObj.optObj("play_addr")
+        val uri = playAddr?.optStr("uri") ?: videoObj.optStr("uri")
+        val rawUrl = extractFirstUrlFromHolder(playAddr)
+            ?: extractFirstUrlFromHolder(videoObj.optObj("play_addr_h264"))
+            ?: extractFirstUrlFromArray(videoObj.optArr("playAddr"))
+            ?: videoObj.optStr("playApi").takeIf { it.startsWith("http") }
+        if (!rawUrl.isNullOrBlank()) {
+            return rewriteToLosslessOriginUrl(rawUrl, PlatformType.DOUYIN)
+        }
+        return uri.takeIf { it.isNotBlank() }?.let {
+            "https://aweme.snssdk.com/aweme/v1/play/?video_id=$it&ratio=1080p&line=0"
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 小红书解析：原文件直链候选 + Live Photo 实况视频 + 4K 视频
+    // ════════════════════════════════════════════════════════════════
+
     private fun parseXiaohongshuHtmlState(
         rawInput: String,
         cleanUrl: String,
@@ -549,35 +821,17 @@ object MultiPlatformParserEngine {
         preferences: UserPreferencesState,
         previousHistory: ParseHistoryEntity?
     ): ParsedPost? {
-        val markers = listOf(
-            "window.__INITIAL_STATE__",
-            "__INITIAL_STATE__",
-            "window.__INITIAL_SSR_STATE__",
-            "__INITIAL_SSR_STATE__"
-        )
-        for (marker in markers) {
-            val initialStateRaw = extractBalancedJsonObject(html, marker)
-            if (!initialStateRaw.isNullOrBlank()) {
-                val sanitizedJson = initialStateRaw.replace(Regex("""\bundefined\b"""), "null")
+        val stateJson = extractBalancedJsonObject(html, "window.__INITIAL_STATE__=")
+            ?: extractBalancedJsonObject(html, "__INITIAL_STATE__=")
+            ?: extractBalancedJsonObject(html, "window.__INITIAL_STATE__ =")
+            ?: return null
 
-                parseXiaohongshuStateJson(
-                    rawInput = rawInput,
-                    cleanUrl = cleanUrl,
-                    stateJsonStr = sanitizedJson,
-                    html = html,
-                    fallbackWorkId = workId,
-                    preferences = preferences,
-                    previousHistory = previousHistory
-                )?.let { return it }
-            }
-        }
-
-        return parseGenericHtmlMetaAndDom(
+        return parseXiaohongshuStateJson(
             rawInput = rawInput,
-            cleanUrl = cleanUrl,
+            cleanUrl = cleanUrl.ifBlank { finalUrl },
+            stateJsonStr = stateJson,
             html = html,
-            platform = PlatformType.XIAOHONGSHU,
-            workId = workId,
+            fallbackWorkId = workId,
             preferences = preferences,
             previousHistory = previousHistory
         )
@@ -593,48 +847,52 @@ object MultiPlatformParserEngine {
         previousHistory: ParseHistoryEntity?
     ): ParsedPost? {
         return try {
-            val root = JsonParser.parseString(stateJsonStr)
+            val normalizedJson = stateJsonStr.replace(":undefined", ":null")
+            val root = JsonParser.parseString(normalizedJson)
             val noteObj = findXiaohongshuNoteObject(root) ?: return null
 
-            val noteId = noteObj.optStr("noteId").ifBlank { fallbackWorkId }
-            val title = noteObj.optStr("title").replace("[话题]#", "").trim()
-            val desc = noteObj.optStr("desc").replace("[话题]#", "").trim()
+            val noteId = noteObj.optStr("noteId")
+                .ifBlank { noteObj.optStr("id") }
+                .ifBlank { fallbackWorkId }
+            val title = noteObj.optStr("title")
+                .ifBlank { noteObj.optStr("displayTitle") }
+                .ifBlank { ParserSupport.extractMetaTags(html, "og:title").firstOrNull() ?: "" }
+                .replace(" - 小红书", "")
+                .trim()
+            val desc = noteObj.optStr("desc")
+                .ifBlank { ParserSupport.extractMetaTags(html, "description").firstOrNull() ?: "" }
+                .trim()
 
             val userObj = noteObj.optObj("user")
-            val authorName = userObj?.optStr("nickname")?.takeIf { it.isNotBlank() }
-                ?: userObj?.optStr("nickName")?.takeIf { it.isNotBlank() }
+            val authorName = userObj?.optStr("nickName")
+                ?.ifBlank { userObj.optStr("nickname") }
+                ?.takeIf { it.isNotBlank() }
                 ?: "小红书创作者"
-            val authorAvatar = (userObj?.optStr("avatar")?.takeIf { it.isNotBlank() }
-                ?: userObj?.optStr("images")?.takeIf { it.isNotBlank() }
-                ?: "").replace("http://", "https://")
+            val authorAvatar = userObj?.optStr("avatar")?.let { ParserSupport.normalizeMediaUrl(it) } ?: ""
 
-            val tags = mutableListOf<String>()
-            noteObj.optArr("tagList")?.let { tagArr ->
-                for (i in 0 until tagArr.size()) {
-                    val name = tagArr.get(i).takeIf { it.isJsonObject }?.asJsonObject?.optStr("name")?.trim()
-                    if (!name.isNullOrBlank()) {
-                        tags.add("#$name")
-                    }
+            val tags = linkedSetOf<String>()
+            noteObj.optArr("tagList")?.let { arr ->
+                for (i in 0 until arr.size()) {
+                    val tName = arr.get(i).takeIf { it.isJsonObject }?.asJsonObject?.optStr("name")
+                    if (!tName.isNullOrBlank()) tags.add("#$tName")
                 }
             }
             if (tags.isEmpty()) {
-                tags.addAll(extractHashtags("$title $desc", null))
+                tags.addAll(ParserSupport.extractHashtagsFromText("$title $desc"))
             }
 
             val mediaItems = mutableListOf<MediaItem>()
             val noteType = noteObj.optStr("type", "normal")
-
             val videoObj = noteObj.optObj("video")
             val videoMasterUrl = extractXiaohongshuVideoUrl(videoObj)
-                ?: extractMetaTags(html, "og:video").firstOrNull()
-
+                ?: ParserSupport.extractMetaTags(html, "og:video").firstOrNull()
             val imageList = noteObj.optArr("imageList") ?: noteObj.optArr("imagesList")
 
             if (noteType == "video" && !videoMasterUrl.isNullOrBlank()) {
                 val firstCover = imageList?.takeIf { it.size() > 0 }
                     ?.get(0)?.takeIf { it.isJsonObject }?.asJsonObject
                     ?.let { extractXiaohongshuPreviewUrl(it) }
-                    ?: extractMetaTags(html, "og:image").firstOrNull()
+                    ?: ParserSupport.extractMetaTags(html, "og:image").firstOrNull()
                     ?: ""
                 val w = videoObj?.optObj("capa")?.optInt("width", 1080) ?: 1080
                 val h = videoObj?.optObj("capa")?.optInt("height", 1920) ?: 1920
@@ -645,9 +903,9 @@ object MultiPlatformParserEngine {
                         index = 0,
                         kind = MediaKind.VIDEO,
                         badge = QualityBadge.VIDEO_HD,
-                        originUrl = videoMasterUrl.replace("http://", "https://"),
-                        previewUrl = firstCover.replace("http://", "https://"),
-                        liveVideoUrl = videoMasterUrl.replace("http://", "https://"),
+                        originUrl = ParserSupport.normalizeMediaUrl(videoMasterUrl),
+                        previewUrl = ParserSupport.normalizeMediaUrl(firstCover),
+                        liveVideoUrl = ParserSupport.normalizeMediaUrl(videoMasterUrl),
                         width = w,
                         height = h,
                         format = "MP4",
@@ -657,6 +915,7 @@ object MultiPlatformParserEngine {
                     )
                 )
             } else if (imageList != null && imageList.size() > 0) {
+                val base = preferences.xhsCdnHostRule.let { if (it.endsWith("/")) it else "$it/" }
                 for (i in 0 until imageList.size()) {
                     val imgObj = imageList.get(i).takeIf { it.isJsonObject }?.asJsonObject ?: continue
                     val previewUrl = extractXiaohongshuPreviewUrl(imgObj) ?: continue
@@ -665,12 +924,19 @@ object MultiPlatformParserEngine {
                         .ifBlank { imgObj.optObj("image")?.optStr("traceId") ?: "" }
                         .ifBlank { imgObj.optObj("image")?.optStr("fileId") ?: "" }
 
+                    // rawUntouchedUrl 不附带 ?imageView2 查询参数，尽可能取回上传原始字节流(含 EXIF/Display P3)
+                    val rawUntouchedUrl = if (traceId.isNotBlank()) "${base}${traceId}" else null
                     val losslessUrl = if (traceId.isNotBlank()) {
-                        val base = preferences.xhsCdnHostRule.let { if (it.endsWith("/")) it else "$it/" }
                         "${base}${traceId}?imageView2/2/w/0/format/png"
                     } else {
                         rewriteToLosslessOriginUrl(previewUrl, PlatformType.XIAOHONGSHU, preferences.xhsCdnHostRule)
                     }
+
+                    // 实况照片动态视频轨识别：imgObj.livePhoto + stream.h264/h265/av1
+                    val liveVideoUrl = extractXiaohongshuVideoUrl(imgObj)
+                        ?: imgObj.optObj("liveVideo")?.optStr("url")?.takeIf { it.startsWith("http") }
+                            ?.let { ParserSupport.normalizeMediaUrl(it) }
+                    val isLive = imgObj.optBool("livePhoto", false) || !liveVideoUrl.isNullOrBlank()
 
                     val w = imgObj.optInt("width", 1440).coerceAtLeast(720)
                     val h = imgObj.optInt("height", 1920).coerceAtLeast(960)
@@ -680,11 +946,16 @@ object MultiPlatformParserEngine {
                         MediaItem(
                             id = "${noteId}_xhs_img_$i",
                             index = i,
-                            kind = MediaKind.IMAGE,
-                            badge = if (is4K) QualityBadge.FOUR_K else QualityBadge.RAW,
+                            kind = if (isLive && !liveVideoUrl.isNullOrBlank()) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,
+                            badge = when {
+                                isLive && !liveVideoUrl.isNullOrBlank() -> QualityBadge.LIVE
+                                is4K -> QualityBadge.FOUR_K
+                                else -> QualityBadge.RAW
+                            },
                             originUrl = losslessUrl,
                             previewUrl = previewUrl,
-                            liveVideoUrl = null,
+                            liveVideoUrl = liveVideoUrl,
+                            fallbackUrls = listOfNotNull(rawUntouchedUrl, losslessUrl, previewUrl).distinct(),
                             width = w,
                             height = h,
                             format = "PNG",
@@ -699,6 +970,7 @@ object MultiPlatformParserEngine {
             if (mediaItems.isEmpty()) return null
 
             val xhsPostTypeLabel = when {
+                mediaItems.any { it.isLivePhoto } -> "小红书·实况图"
                 mediaItems.any { it.isVideo } -> "小红书·视频"
                 else -> "小红书·图集"
             }
@@ -716,7 +988,7 @@ object MultiPlatformParserEngine {
                 coverUrl = mediaItems.first().previewUrl,
                 title = title,
                 content = desc,
-                tags = tags,
+                tags = tags.toList(),
                 mediaItems = mediaItems,
                 bgmAudio = null,
                 parseEngineSource = "小红书原画直连",
@@ -728,6 +1000,10 @@ object MultiPlatformParserEngine {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // 快手解析：INIT_STATE / __APOLLO_STATE__ + 正则嗅探
+    // ════════════════════════════════════════════════════════════════
+
     private fun parseKuaishouHtmlState(
         rawInput: String,
         cleanUrl: String,
@@ -736,7 +1012,9 @@ object MultiPlatformParserEngine {
         workId: String,
         previousHistory: ParseHistoryEntity?
     ): ParsedPost? {
-        val initStateStr = extractBalancedJsonObject(html, "window.INIT_STATE") ?: return null
+        val initStateStr = extractBalancedJsonObject(html, "window.INIT_STATE")
+            ?: extractBalancedJsonObject(html, "__APOLLO_STATE__")
+            ?: return null
         return parseKuaishouStateJson(
             rawInput = rawInput,
             cleanUrl = cleanUrl,
@@ -771,9 +1049,7 @@ object MultiPlatformParserEngine {
                 }
                 for (entry in obj.entrySet()) {
                     val child = entry.value
-                    if (child.isJsonObject) {
-                        searchForPhoto(child.asJsonObject)
-                    }
+                    if (child.isJsonObject) searchForPhoto(child.asJsonObject)
                 }
             }
             searchForPhoto(root)
@@ -783,17 +1059,17 @@ object MultiPlatformParserEngine {
             val caption = photoObj.optStr("caption").trim()
             val authorName = photoObj.optStr("userName").takeIf { it.isNotBlank() } ?: "快手创作者"
             val authorHandle = photoObj.optStr("userId").takeIf { it.isNotBlank() } ?: photoId.take(8)
-            val authorAvatar = photoObj.optStr("headUrl").replace("http://", "https://")
+            val authorAvatar = ParserSupport.normalizeMediaUrl(photoObj.optStr("headUrl"))
             val width = photoObj.optInt("width", 1080).coerceAtLeast(720)
             val height = photoObj.optInt("height", 1920).coerceAtLeast(960)
 
             val mediaItems = mutableListOf<MediaItem>()
-
-            // 1. 检查是否为视频（mainMvUrls 或 videoUrl）
             val mainMvArr = photoObj.optArr("mainMvUrls")
-            val rawVideoUrl = extractFirstUrlFromArray(mainMvArr) ?: photoObj.optStr("videoUrl").takeIf { it.isNotBlank() }
+            val rawVideoUrl = extractFirstUrlFromArray(mainMvArr)
+                ?: photoObj.optStr("videoUrl").takeIf { it.isNotBlank() }
+
             if (!rawVideoUrl.isNullOrBlank()) {
-                val losslessVid = rawVideoUrl.replace("http://", "https://")
+                val losslessVid = ParserSupport.normalizeMediaUrl(rawVideoUrl)
                 val coverUrl = extractFirstUrlFromArray(photoObj.optArr("coverUrls"))
                     ?: extractFirstUrlFromArray(photoObj.optArr("webpCoverUrls"))
                     ?: losslessVid
@@ -815,7 +1091,6 @@ object MultiPlatformParserEngine {
                     )
                 )
             } else {
-                // 2. 检查多图图集 (atlas)
                 val atlasObj = targetAtlasObj ?: photoObj.optObj("atlas")
                 val atlasList = atlasObj?.optArr("list")
                 val cdnList = atlasObj?.optArr("cdnList") ?: targetSingleObj?.optArr("cdnList")
@@ -826,12 +1101,10 @@ object MultiPlatformParserEngine {
                     for (i in 0 until atlasList.size()) {
                         val el = atlasList.get(i)
                         val path = if (el.isJsonPrimitive) el.asString else continue
-                        val fullUrl = if (path.startsWith("http")) {
-                            path.replace("http://", "https://")
-                        } else if (!cdnHost.isNullOrBlank()) {
-                            "https://$cdnHost/${path.trimStart('/')}"
-                        } else {
-                            "https://p1.a.yximgs.com/${path.trimStart('/')}"
+                        val fullUrl = when {
+                            path.startsWith("http") -> ParserSupport.normalizeMediaUrl(path)
+                            !cdnHost.isNullOrBlank() -> "https://$cdnHost/${path.trimStart('/')}"
+                            else -> "https://p1.a.yximgs.com/${path.trimStart('/')}"
                         }
                         val originUrl = rewriteToLosslessOriginUrl(fullUrl, PlatformType.KUAISHOU)
                         val is4K = width >= 2160 || height >= 2160
@@ -845,7 +1118,7 @@ object MultiPlatformParserEngine {
                                 previewUrl = fullUrl,
                                 width = width,
                                 height = height,
-                                format = "JPG",
+                                format = ParserSupport.detectImageFormat(originUrl, "JPG"),
                                 colorSpace = "Display P3",
                                 themeTitle = caption,
                                 visualSeed = i
@@ -853,7 +1126,6 @@ object MultiPlatformParserEngine {
                         )
                     }
                 } else {
-                    // 3. 单图作品 (singlePicture 原图直出)
                     val covers = photoObj.optArr("coverUrls") ?: photoObj.optArr("webpCoverUrls")
                     val coverCandidate = extractFirstUrlFromArray(covers)
                     if (!coverCandidate.isNullOrBlank()) {
@@ -869,7 +1141,7 @@ object MultiPlatformParserEngine {
                                 previewUrl = coverCandidate,
                                 width = width,
                                 height = height,
-                                format = "JPG",
+                                format = ParserSupport.detectImageFormat(originUrl, "JPG"),
                                 colorSpace = "Display P3",
                                 themeTitle = caption,
                                 visualSeed = 0
@@ -881,7 +1153,6 @@ object MultiPlatformParserEngine {
 
             if (mediaItems.isEmpty()) return null
 
-            // 提取背景原声音乐 BGM
             val singleObj = targetSingleObj
             val musicPath = singleObj?.optStr("music")?.takeIf { it.isNotBlank() }
                 ?: photoObj.optStr("music").takeIf { it.isNotBlank() }
@@ -889,12 +1160,11 @@ object MultiPlatformParserEngine {
                 ?.get(0)?.takeIf { it.isJsonObject }?.asJsonObject?.optStr("cdn")
 
             val bgmAudio = if (!musicPath.isNullOrBlank()) {
-                val fullMusicUrl = if (musicPath.startsWith("http")) {
-                    musicPath.replace("http://", "https://")
-                } else if (!musicCdn.isNullOrBlank()) {
-                    "https://$musicCdn/${musicPath.trimStart('/')}"
-                } else null
-
+                val fullMusicUrl = when {
+                    musicPath.startsWith("http") -> ParserSupport.normalizeMediaUrl(musicPath)
+                    !musicCdn.isNullOrBlank() -> "https://$musicCdn/${musicPath.trimStart('/')}"
+                    else -> null
+                }
                 fullMusicUrl?.let {
                     AudioTrackInfo(
                         id = "${photoId}_ks_bgm",
@@ -906,12 +1176,10 @@ object MultiPlatformParserEngine {
                 }
             } else null
 
-            val tags = extractHashtags(caption, null)
-
             ParsedPost(
                 id = "post_$photoId",
                 sourceShareText = rawInput,
-                extractedUrl = cleanUrl,
+                extractedUrl = cleanUrl.ifBlank { finalUrl },
                 noteId = photoId,
                 platform = PlatformType.KUAISHOU,
                 postTypeLabel = if (mediaItems.any { it.isVideo }) "快手·视频" else "快手·图集",
@@ -921,7 +1189,7 @@ object MultiPlatformParserEngine {
                 coverUrl = mediaItems.first().previewUrl,
                 title = caption.take(40).ifBlank { "快手作品分享" },
                 content = caption,
-                tags = tags,
+                tags = ParserSupport.extractHashtagsFromText(caption),
                 mediaItems = mediaItems,
                 bgmAudio = bgmAudio,
                 parseEngineSource = "快手原画直连",
@@ -943,17 +1211,14 @@ object MultiPlatformParserEngine {
     ): ParsedPost? {
         if (html.isBlank()) return null
         return try {
-            val captionPattern = Pattern.compile(""""caption"\s*:\s*"((?:[^"\\]|\\.)*)"""")
-            val captionMatcher = captionPattern.matcher(html)
+            val captionMatcher = Pattern.compile(""""caption"\s*:\s*"((?:[^"\\]|\\.)*)"""").matcher(html)
             val caption = if (captionMatcher.find()) decodeJsonString(captionMatcher.group(1) ?: "") else ""
 
-            val userPattern = Pattern.compile(""""userName"\s*:\s*"((?:[^"\\]|\\.)*)"""")
-            val userMatcher = userPattern.matcher(html)
+            val userMatcher = Pattern.compile(""""userName"\s*:\s*"((?:[^"\\]|\\.)*)"""").matcher(html)
             val userName = if (userMatcher.find()) decodeJsonString(userMatcher.group(1) ?: "") else "快手创作者"
 
-            val headPattern = Pattern.compile(""""headUrl"\s*:\s*"((?:[^"\\]|\\.)*)"""")
-            val headMatcher = headPattern.matcher(html)
-            val headUrl = if (headMatcher.find()) decodeJsonString(headMatcher.group(1) ?: "").replace("http://", "https://") else ""
+            val headMatcher = Pattern.compile(""""headUrl"\s*:\s*"((?:[^"\\]|\\.)*)"""").matcher(html)
+            val headUrl = if (headMatcher.find()) ParserSupport.normalizeMediaUrl(decodeJsonString(headMatcher.group(1) ?: "")) else ""
 
             val wPattern = Pattern.compile(""""width"\s*:\s*(\d+)""").matcher(html)
             val width = if (wPattern.find()) wPattern.group(1)?.toIntOrNull() ?: 1080 else 1080
@@ -961,11 +1226,9 @@ object MultiPlatformParserEngine {
             val height = if (hPattern.find()) hPattern.group(1)?.toIntOrNull() ?: 1920 else 1920
 
             val mediaItems = mutableListOf<MediaItem>()
-
-            val mvPattern = Pattern.compile(""""mainMvUrls"\s*:\s*\[\s*\{.*?"url"\s*:\s*"((?:[^"\\]|\\.)*)"""")
-            val mvMatcher = mvPattern.matcher(html)
+            val mvMatcher = Pattern.compile(""""mainMvUrls"\s*:\s*\[\s*\{.*?"url"\s*:\s*"((?:[^"\\]|\\.)*)"""").matcher(html)
             if (mvMatcher.find()) {
-                val vidUrl = decodeJsonString(mvMatcher.group(1) ?: "").replace("http://", "https://")
+                val vidUrl = ParserSupport.normalizeMediaUrl(decodeJsonString(mvMatcher.group(1) ?: ""))
                 mediaItems.add(
                     MediaItem(
                         id = "${workId}_ks_vid_0",
@@ -988,8 +1251,10 @@ object MultiPlatformParserEngine {
                 val imgMatcher = imgPattern.matcher(html)
                 val foundImages = linkedSetOf<String>()
                 while (imgMatcher.find()) {
-                    val rawU = decodeJsonString(imgMatcher.group(0) ?: "").replace("http://", "https://")
-                    if (!rawU.contains("avatar") && !rawU.contains("head") && !rawU.contains("icon") && !rawU.endsWith(".js") && !rawU.endsWith(".css")) {
+                    val rawU = ParserSupport.normalizeMediaUrl(decodeJsonString(imgMatcher.group(0) ?: ""))
+                    if (!rawU.contains("avatar") && !rawU.contains("head") && !rawU.contains("icon") &&
+                        !rawU.endsWith(".js") && !rawU.endsWith(".css")
+                    ) {
                         foundImages.add(rawU)
                     }
                 }
@@ -1016,24 +1281,23 @@ object MultiPlatformParserEngine {
             }
 
             if (mediaItems.isEmpty()) return null
-
-            return ParsedPost(
+            ParsedPost(
                 id = "post_$workId",
                 sourceShareText = rawInput,
-                extractedUrl = cleanUrl,
+                extractedUrl = cleanUrl.ifBlank { finalUrl },
                 noteId = workId,
                 platform = PlatformType.KUAISHOU,
                 postTypeLabel = if (mediaItems.any { it.isVideo }) "快手·视频" else "快手·图集",
                 authorName = userName,
-                authorHandle = "@${workId.take(8)}",
+                authorHandle = "@$workId",
                 authorAvatarUrl = headUrl,
                 coverUrl = mediaItems.first().previewUrl,
                 title = caption.take(40).ifBlank { "快手作品分享" },
                 content = caption,
-                tags = extractHashtags(caption, null),
+                tags = ParserSupport.extractHashtagsFromText(caption),
                 mediaItems = mediaItems,
                 bgmAudio = null,
-                parseEngineSource = "快手正则兜底",
+                parseEngineSource = "快手原画直连",
                 isDuplicateDownload = previousHistory?.downloadedOnce == true,
                 previousDownloadTimeMillis = previousHistory?.parsedAtMillis
             )
@@ -1042,16 +1306,16 @@ object MultiPlatformParserEngine {
         }
     }
 
-    private fun decodeJsonString(input: String): String {
-        return input
+    private fun decodeJsonString(raw: String): String {
+        return raw.replace("\\u002F", "/")
             .replace("\\/", "/")
             .replace("\\\"", "\"")
             .replace("\\n", "\n")
-            .replace("\\r", "\r")
-            .replace("\\t", "\t")
-            .replace("\\u002F", "/")
-            .replace("\\u0026", "&")
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // 后台 WebView 嗅探结果聚合与通用 HTML 兜底解析
+    // ════════════════════════════════════════════════════════════════
 
     private fun parseFromWebSniffResult(
         rawInput: String,
@@ -1064,99 +1328,87 @@ object MultiPlatformParserEngine {
         val workId = ShareLinkExtractor.extractWorkId(sniff.finalUrl.ifBlank { cleanUrl }, platform)
 
         if (!sniff.routerDataJson.isNullOrBlank()) {
-            parseDouyinRouterJson(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                routerJsonStr = sniff.routerDataJson,
-                fallbackWorkId = workId,
-                previousHistory = previousHistory
-            )?.let { return it }
+            parseDouyinRouterJson(rawInput, cleanUrl, sniff.routerDataJson, workId, previousHistory)?.let { return it }
         }
-        if (!sniff.apiResponseJson.isNullOrBlank()) {
-            parseDouyinRouterJson(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                routerJsonStr = sniff.apiResponseJson,
-                fallbackWorkId = workId,
-                previousHistory = previousHistory
-            )?.let { return it }
+        if (platform == PlatformType.DOUYIN && !sniff.apiResponseJson.isNullOrBlank()) {
+            parseDouyinRouterJson(rawInput, cleanUrl, sniff.apiResponseJson, workId, previousHistory)?.let { return it }
         }
-        if (!sniff.renderDataEncoded.isNullOrBlank()) {
-            val decoded = runCatching { URLDecoder.decode(sniff.renderDataEncoded, "UTF-8") }.getOrNull()
+        if (platform == PlatformType.DOUYIN && !sniff.renderDataEncoded.isNullOrBlank()) {
+            val decoded = runCatching { URLDecoder.decode(sniff.renderDataEncoded.trim(), "UTF-8") }.getOrNull()
             if (!decoded.isNullOrBlank()) {
-                parseDouyinRouterJson(
+                parseDouyinRouterJson(rawInput, cleanUrl, decoded, workId, previousHistory)?.let { return it }
+            }
+        }
+
+        if (!sniff.initialStateJson.isNullOrBlank()) {
+            when (platform) {
+                PlatformType.ZUIYOU -> DomesticExtPlatformParsers.parseZuiyouJson(
+                    rawInput, sniff.finalUrl, sniff.initialStateJson, workId, previousHistory
+                )?.let { return it }
+
+                PlatformType.BILIBILI -> DomesticExtPlatformParsers.parseBilibiliDynamicJson(
+                    rawInput, sniff.finalUrl, sniff.initialStateJson, workId, previousHistory
+                )?.let { return it }
+
+                PlatformType.PINTEREST -> InternationalPlatformParsers.parsePinterestPwsJson(
+                    rawInput, sniff.finalUrl, sniff.initialStateJson, workId, previousHistory
+                )?.let { return it }
+
+                PlatformType.TIKTOK -> InternationalPlatformParsers.parseTikTokHtmlState(
+                    rawInput, sniff.finalUrl, "<script id=\"SIGI_STATE\">${sniff.initialStateJson}</script>", previousHistory
+                )?.let { return it }
+
+                PlatformType.YOUTUBE -> InternationalPlatformParsers.parseYouTubePlayerJson(
+                    rawInput, sniff.finalUrl, sniff.initialStateJson, workId, previousHistory
+                )?.let { return it }
+
+                else -> parseXiaohongshuStateJson(
                     rawInput = rawInput,
                     cleanUrl = cleanUrl,
-                    routerJsonStr = decoded,
+                    stateJsonStr = sniff.initialStateJson,
+                    html = sniff.rawHtml,
                     fallbackWorkId = workId,
+                    preferences = preferences,
                     previousHistory = previousHistory
                 )?.let { return it }
             }
         }
 
-        if (!sniff.initialStateJson.isNullOrBlank()) {
-            parseXiaohongshuStateJson(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                stateJsonStr = sniff.initialStateJson,
-                html = sniff.rawHtml,
-                fallbackWorkId = workId,
-                preferences = preferences,
-                previousHistory = previousHistory
-            )?.let { return it }
-        }
-
         if (sniff.stateScriptText.isNotBlank()) {
-            parseDouyinHtmlState(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                finalUrl = sniff.finalUrl,
-                html = sniff.stateScriptText,
-                workId = workId,
-                previousHistory = previousHistory
-            )?.let { return it }
-
-            parseXiaohongshuHtmlState(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                finalUrl = sniff.finalUrl,
-                html = sniff.stateScriptText,
-                workId = workId,
-                preferences = preferences,
-                previousHistory = previousHistory
-            )?.let { return it }
+            parseDouyinHtmlState(rawInput, cleanUrl, sniff.finalUrl, sniff.stateScriptText, workId, previousHistory)
+                ?.let { return it }
+            parseXiaohongshuHtmlState(rawInput, cleanUrl, sniff.finalUrl, sniff.stateScriptText, workId, preferences, previousHistory)
+                ?.let { return it }
+            if (platform == PlatformType.TIKTOK) {
+                InternationalPlatformParsers.parseTikTokHtmlState(rawInput, sniff.finalUrl, sniff.stateScriptText, previousHistory)
+                    ?.let { return it }
+            }
         }
 
         if (platform == PlatformType.KUAISHOU) {
             val stateCandidate = sniff.initialStateJson ?: sniff.stateScriptText
             if (stateCandidate.isNotBlank()) {
-                parseKuaishouStateJson(
-                    rawInput = rawInput,
-                    cleanUrl = cleanUrl,
-                    finalUrl = sniff.finalUrl,
-                    stateJsonStr = stateCandidate,
-                    workId = workId,
-                    previousHistory = previousHistory
-                )?.let { return it }
+                parseKuaishouStateJson(rawInput, cleanUrl, sniff.finalUrl, stateCandidate, workId, previousHistory)
+                    ?.let { return it }
             }
-            parseKuaishouHtmlState(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                finalUrl = sniff.finalUrl,
-                html = sniff.rawHtml,
-                workId = workId,
-                previousHistory = previousHistory
+            parseKuaishouHtmlState(rawInput, cleanUrl, sniff.finalUrl, sniff.rawHtml, workId, previousHistory)
+                ?.let { return it }
+            parseKuaishouRegexSniff(rawInput, cleanUrl, sniff.finalUrl, sniff.rawHtml, workId, previousHistory)
+                ?.let { return it }
+        }
+
+        if (platform == PlatformType.INSTAGRAM) {
+            InternationalPlatformParsers.parseInstagramHtmlOrJson(
+                rawInput, sniff.finalUrl, sniff.rawHtml, workId, previousHistory
             )?.let { return it }
-            parseKuaishouRegexSniff(
-                rawInput = rawInput,
-                cleanUrl = cleanUrl,
-                finalUrl = sniff.finalUrl,
-                html = sniff.rawHtml,
-                workId = workId,
-                previousHistory = previousHistory
+        }
+        if (platform == PlatformType.THREADS) {
+            InternationalPlatformParsers.parseThreadsHtml(
+                rawInput, sniff.finalUrl, sniff.rawHtml, previousHistory
             )?.let { return it }
         }
 
+        // 从动态拦截的网络流、DOM 与 OG Meta 中聚合媒体项
         val mediaItems = mutableListOf<MediaItem>()
 
         val videoCandidates = linkedSetOf<String>().apply {
@@ -1165,30 +1417,41 @@ object MultiPlatformParserEngine {
             sniff.sniffedMediaUrls.filter {
                 (it.contains("aweme/v1/play") || it.contains("douyinvod") || it.contains("bytevcloud") ||
                     (it.contains("snssdk.com") && it.contains("play")) || it.contains("sns-video") ||
-                    it.contains("xhscdn.com/stream") || it.endsWith(".mp4")) &&
+                    it.contains("xhscdn.com/stream") || it.contains("video.twimg.com") ||
+                    it.contains("tiktokcdn") || it.contains("f.video.weibocdn") ||
+                    it.endsWith(".mp4")) &&
                     !it.contains("/music/") && !it.endsWith(".mp3") && !it.endsWith(".m4a")
             }.forEach { add(it) }
         }
 
         val imageCandidates = linkedSetOf<String>().apply {
-            sniff.ogImages.filter { it.startsWith("http") }.forEach { add(it) }
-            sniff.domImages.filter { it.startsWith("http") }.forEach { add(it) }
+            sniff.ogImages.filter { it.startsWith("http") && !isDouyinWatermarkedImageUrl(it) }.forEach { add(it) }
+            sniff.domImages.filter { it.startsWith("http") && !isDouyinWatermarkedImageUrl(it) }.forEach { add(it) }
             sniff.sniffedMediaUrls.filter {
                 (it.contains("xhscdn.com") || it.contains("douyinpic.com") || it.contains("izuiyou.com") ||
-                    it.contains("yximgs.com") || it.contains("kwimgs.com") || it.contains("kwaicdn.com")) &&
-                    !it.endsWith(".mp4")
+                    it.contains("yximgs.com") || it.contains("kwimgs.com") || it.contains("kwaicdn.com") ||
+                    it.contains("sinaimg.cn") || it.contains("hdslb.com") || it.contains("pbs.twimg.com") ||
+                    it.contains("cdninstagram.com") || it.contains("fbcdn.net") || it.contains("pinimg.com") ||
+                    it.contains("redd.it")) &&
+                    !it.endsWith(".mp4") && !it.contains("avatar") && !it.contains("profile") &&
+                    !isDouyinWatermarkedImageUrl(it)
             }.forEach { add(it) }
         }
 
-        val firstCover = imageCandidates.firstOrNull()?.replace("http://", "https://") ?: ""
-        val targetImages = if (sniff.ogImages.isNotEmpty()) sniff.ogImages else imageCandidates.toList()
+        val firstCover = imageCandidates.firstOrNull()?.let { ParserSupport.normalizeMediaUrl(it) } ?: ""
+        val cleanOgImages = sniff.ogImages.filter { it.startsWith("http") && !isDouyinWatermarkedImageUrl(it) }
+        val targetImages = if (cleanOgImages.size > 1) cleanOgImages else imageCandidates.toList()
         val hasMultipleImages = targetImages.size > 1
         val hasVideo = videoCandidates.isNotEmpty()
 
         if (hasMultipleImages) {
-            targetImages.distinct().take(35).forEachIndexed { idx, rawImgUrl ->
-                val preview = rawImgUrl.replace("http://", "https://")
+            targetImages.distinct().take(36).forEachIndexed { idx, rawImgUrl ->
+                val preview = ParserSupport.normalizeMediaUrl(rawImgUrl)
                 val lossless = rewriteToLosslessOriginUrl(preview, platform, preferences.xhsCdnHostRule)
+                val rawXhs = if (platform == PlatformType.XIAOHONGSHU) {
+                    val base = preferences.xhsCdnHostRule.let { if (it.endsWith("/")) it else "$it/" }
+                    "${base}${extractXhsObjectKey(preview)}"
+                } else null
                 mediaItems.add(
                     MediaItem(
                         id = "${workId}_img_$idx",
@@ -1197,9 +1460,10 @@ object MultiPlatformParserEngine {
                         badge = QualityBadge.RAW,
                         originUrl = lossless,
                         previewUrl = preview,
+                        fallbackUrls = listOfNotNull(rawXhs, lossless, preview).distinct(),
                         width = 1440,
                         height = 1920,
-                        format = if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG",
+                        format = ParserSupport.detectImageFormat(lossless, if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG"),
                         colorSpace = "Display P3",
                         themeTitle = sniff.ogTitle.ifBlank { sniff.title },
                         visualSeed = idx
@@ -1207,7 +1471,7 @@ object MultiPlatformParserEngine {
                 )
             }
         } else if (hasVideo) {
-            val rawVid = videoCandidates.first()
+            val rawVid = ParserSupport.normalizeMediaUrl(videoCandidates.first())
             val losslessVid = rewriteToLosslessOriginUrl(rawVid, platform, preferences.xhsCdnHostRule)
             mediaItems.add(
                 MediaItem(
@@ -1217,7 +1481,7 @@ object MultiPlatformParserEngine {
                     badge = QualityBadge.VIDEO_HD,
                     originUrl = losslessVid,
                     previewUrl = firstCover.ifBlank { losslessVid },
-                    liveVideoUrl = null,
+                    liveVideoUrl = losslessVid,
                     width = 1080,
                     height = 1920,
                     format = "MP4",
@@ -1227,9 +1491,13 @@ object MultiPlatformParserEngine {
                 )
             )
         } else {
-            targetImages.distinct().take(35).forEachIndexed { idx, rawImgUrl ->
-                val preview = rawImgUrl.replace("http://", "https://")
+            targetImages.distinct().take(36).forEachIndexed { idx, rawImgUrl ->
+                val preview = ParserSupport.normalizeMediaUrl(rawImgUrl)
                 val lossless = rewriteToLosslessOriginUrl(preview, platform, preferences.xhsCdnHostRule)
+                val rawXhs = if (platform == PlatformType.XIAOHONGSHU) {
+                    val base = preferences.xhsCdnHostRule.let { if (it.endsWith("/")) it else "$it/" }
+                    "${base}${extractXhsObjectKey(preview)}"
+                } else null
                 mediaItems.add(
                     MediaItem(
                         id = "${workId}_img_$idx",
@@ -1238,9 +1506,10 @@ object MultiPlatformParserEngine {
                         badge = QualityBadge.RAW,
                         originUrl = lossless,
                         previewUrl = preview,
+                        fallbackUrls = listOfNotNull(rawXhs, lossless, preview).distinct(),
                         width = 1440,
                         height = 1920,
-                        format = if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG",
+                        format = ParserSupport.detectImageFormat(lossless, if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG"),
                         colorSpace = "Display P3",
                         themeTitle = sniff.ogTitle.ifBlank { sniff.title },
                         visualSeed = idx
@@ -1259,7 +1528,7 @@ object MultiPlatformParserEngine {
 
         val postTypeLabel = when {
             mediaItems.any { it.isVideo } -> "${platform.displayName}·视频"
-            else -> "${platform.displayName}·图集"
+            else -> "${platform.displayName}·原图"
         }
 
         return ParsedPost(
@@ -1275,7 +1544,7 @@ object MultiPlatformParserEngine {
             coverUrl = mediaItems.first().previewUrl,
             title = cleanTitle,
             content = cleanDesc,
-            tags = extractHashtags("$cleanTitle $cleanDesc", null),
+            tags = ParserSupport.extractHashtagsFromText("$cleanTitle $cleanDesc"),
             mediaItems = mediaItems,
             bgmAudio = null,
             parseEngineSource = "动态引擎直出",
@@ -1295,26 +1564,30 @@ object MultiPlatformParserEngine {
     ): ParsedPost? {
         if (html.isBlank()) return null
 
-        val ogImages = extractMetaTags(html, "og:image")
-        val ogVideos = extractMetaTags(html, "og:video") + extractMetaTags(html, "og:video:url")
-        val ogTitle = extractMetaTags(html, "og:title").firstOrNull()
-            ?: extractHtmlTitle(html)
-        val ogDesc = extractMetaTags(html, "description").firstOrNull()
-            ?: extractMetaTags(html, "og:description").firstOrNull()
+        val ogImages = (ParserSupport.extractMetaTags(html, "og:image") +
+            ParserSupport.extractMetaTags(html, "twitter:image")).distinct()
+        val ogVideos = (ParserSupport.extractMetaTags(html, "og:video") +
+            ParserSupport.extractMetaTags(html, "og:video:url") +
+            ParserSupport.extractMetaTags(html, "og:video:secure_url")).distinct()
+        val ogTitle = ParserSupport.extractMetaTags(html, "og:title").firstOrNull()
+            ?: ParserSupport.extractHtmlTitle(html)
+        val ogDesc = ParserSupport.extractMetaTags(html, "description").firstOrNull()
+            ?: ParserSupport.extractMetaTags(html, "og:description").firstOrNull()
             ?: ogTitle
 
         val mediaItems = mutableListOf<MediaItem>()
 
         if (ogVideos.isNotEmpty()) {
-            val vidUrl = ogVideos.first().replace("http://", "https://")
-            val coverUrl = ogImages.firstOrNull()?.replace("http://", "https://") ?: vidUrl
+            val vidUrl = ParserSupport.normalizeMediaUrl(ogVideos.first())
+            val coverUrl = ogImages.firstOrNull()?.let { ParserSupport.normalizeMediaUrl(it) } ?: vidUrl
+            val losslessVid = rewriteToLosslessOriginUrl(vidUrl, platform, preferences.xhsCdnHostRule)
             mediaItems.add(
                 MediaItem(
                     id = "${workId}_vid_0",
                     index = 0,
                     kind = MediaKind.VIDEO,
                     badge = QualityBadge.VIDEO_HD,
-                    originUrl = rewriteToLosslessOriginUrl(vidUrl, platform, preferences.xhsCdnHostRule),
+                    originUrl = losslessVid,
                     previewUrl = coverUrl,
                     liveVideoUrl = vidUrl,
                     width = 1080,
@@ -1325,24 +1598,41 @@ object MultiPlatformParserEngine {
                     visualSeed = 0
                 )
             )
-        } else if (ogImages.isNotEmpty()) {
-            ogImages.distinct().take(35).forEachIndexed { index, rawImg ->
-                val preview = rawImg.replace("http://", "https://")
-                val lossless = rewriteToLosslessOriginUrl(preview, platform, preferences.xhsCdnHostRule)
+        }
+
+        // 若无 OG 视频且仅有 OG 图，额外嗅探 HTML 中高清 srcset 大图
+        val extraDomImgs = mutableListOf<String>()
+        if (ogImages.isEmpty()) {
+            val imgPattern = Pattern.compile("""<img[^>]+src=["'](https?://[^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']""", Pattern.CASE_INSENSITIVE)
+            val m = imgPattern.matcher(html)
+            while (m.find() && extraDomImgs.size < 18) {
+                val u = ParserSupport.normalizeMediaUrl(m.group(1) ?: "")
+                if (!u.contains("avatar") && !u.contains("icon") && !u.contains("logo") && !u.contains("favicon")) {
+                    extraDomImgs.add(u)
+                }
+            }
+        }
+
+        val targetImages = if (ogImages.isNotEmpty()) ogImages else extraDomImgs
+        if (mediaItems.isEmpty() || ogImages.size > 1) {
+            targetImages.take(30).forEachIndexed { idx, rawUrl ->
+                val cleanImgUrl = ParserSupport.normalizeMediaUrl(rawUrl)
+                val lossless = rewriteToLosslessOriginUrl(cleanImgUrl, platform, preferences.xhsCdnHostRule)
                 mediaItems.add(
                     MediaItem(
-                        id = "${workId}_img_$index",
-                        index = index,
+                        id = "${workId}_og_$idx",
+                        index = mediaItems.size,
                         kind = MediaKind.IMAGE,
                         badge = QualityBadge.RAW,
                         originUrl = lossless,
-                        previewUrl = preview,
+                        previewUrl = cleanImgUrl,
+                        fallbackUrls = listOf(lossless, cleanImgUrl).distinct(),
                         width = 1440,
                         height = 1920,
-                        format = if (platform == PlatformType.XIAOHONGSHU) "PNG" else "JPG",
+                        format = ParserSupport.detectImageFormat(lossless, "JPG"),
                         colorSpace = "Display P3",
                         themeTitle = ogTitle,
-                        visualSeed = index
+                        visualSeed = idx
                     )
                 )
             }
@@ -1350,127 +1640,35 @@ object MultiPlatformParserEngine {
 
         if (mediaItems.isEmpty()) return null
 
-        val cleanTitle = ogTitle
-            .replace(" - 小红书", "")
-            .replace(" - 抖音", "")
-            .trim()
-
-        return ParsedPost(
+        val post = ParsedPost(
             id = "post_$workId",
             sourceShareText = rawInput,
             extractedUrl = cleanUrl,
             noteId = workId,
             platform = platform,
-            postTypeLabel = if (mediaItems.any { it.isVideo }) "${platform.displayName}·视频" else "${platform.displayName}·图集",
-            authorName = "${platform.displayName}创作者",
+            postTypeLabel = if (mediaItems.any { it.isVideo }) "${platform.displayName}·视频" else "${platform.displayName}·原图",
+            authorName = "${platform.displayName}内容",
             authorHandle = "@${workId.take(8)}",
             authorAvatarUrl = "",
             coverUrl = mediaItems.first().previewUrl,
-            title = cleanTitle,
+            title = ogTitle,
             content = ogDesc,
-            tags = extractHashtags("$cleanTitle $ogDesc", null),
+            tags = ParserSupport.extractHashtagsFromText("$ogTitle $ogDesc"),
             mediaItems = mediaItems,
             bgmAudio = null,
-            parseEngineSource = "原画直连",
+            parseEngineSource = "标准网页嗅探引擎",
             isDuplicateDownload = previousHistory?.downloadedOnce == true,
             previousDownloadTimeMillis = previousHistory?.parsedAtMillis
         )
+        return ParserSupport.applyDuplicateInfo(post, previousHistory)
     }
 
-    private fun fetchPageFollowingRedirects(
-        startUrl: String,
-        platform: PlatformType,
-        customCookie: String?
-    ): HttpPageResponse? {
-        var currentUrl = startUrl
-        var redirects = 0
+    // ════════════════════════════════════════════════════════════════
+    // 状态树提取辅助与 Room 历史转换
+    // ════════════════════════════════════════════════════════════════
 
-        while (redirects < 8) {
-            var conn: HttpURLConnection? = null
-            try {
-                val url = URL(currentUrl)
-                conn = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 6000
-                    readTimeout = 6000
-                    instanceFollowRedirects = false
-                    requestMethod = "GET"
-                    setRequestProperty("User-Agent", MOBILE_UA)
-                    setRequestProperty(
-                        "Accept",
-                        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                    )
-                    setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                    setRequestProperty("Referer", DynamicMediaRenderer.refererForPlatform(platform, currentUrl))
-                    if (!customCookie.isNullOrBlank()) {
-                        setRequestProperty("Cookie", customCookie)
-                    }
-                }
-
-                val code = conn.responseCode
-                if (code in listOf(301, 302, 303, 307, 308)) {
-                    val loc = conn.getHeaderField("Location") ?: break
-                    currentUrl = URL(url, loc).toString()
-                    redirects++
-                    continue
-                }
-
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val html = stream?.let { s ->
-                    BufferedReader(InputStreamReader(s, Charsets.UTF_8)).use { it.readText() }
-                } ?: ""
-
-                return HttpPageResponse(
-                    finalUrl = currentUrl,
-                    html = html,
-                    statusCode = code
-                )
-            } catch (_: Exception) {
-                return null
-            } finally {
-                conn?.disconnect()
-            }
-        }
-        return null
-    }
-
-    fun extractBalancedJsonObject(html: String, marker: String): String? {
-        val markerIdx = html.indexOf(marker)
-        if (markerIdx == -1) return null
-
-        val startBraceIdx = html.indexOf('{', markerIdx + marker.length)
-        if (startBraceIdx == -1) return null
-
-        var depth = 0
-        var inString = false
-        var escaped = false
-
-        for (i in startBraceIdx until html.length) {
-            val ch = html[i]
-            if (escaped) {
-                escaped = false
-                continue
-            }
-            if (ch == '\\') {
-                if (inString) escaped = true
-                continue
-            }
-            if (ch == '"') {
-                inString = !inString
-                continue
-            }
-            if (!inString) {
-                if (ch == '{') {
-                    depth++
-                } else if (ch == '}') {
-                    depth--
-                    if (depth == 0) {
-                        return html.substring(startBraceIdx, i + 1)
-                    }
-                }
-            }
-        }
-        return null
-    }
+    fun extractBalancedJsonObject(html: String, marker: String): String? =
+        ParserSupport.extractBalancedJsonObject(html, marker)
 
     private fun extractRenderDataJson(html: String): String? {
         val matcher = Pattern.compile(
@@ -1484,20 +1682,50 @@ object MultiPlatformParserEngine {
         return null
     }
 
+    private fun extractDouyinPacePayloadJson(html: String): String? {
+        if (!html.contains("self.__pace_f.push")) return null
+        var searchFrom = 0
+        while (searchFrom < html.length) {
+            val pushIdx = html.indexOf("self.__pace_f.push", searchFrom)
+            if (pushIdx == -1) break
+            val quoteStart = html.indexOf('"', pushIdx)
+            if (quoteStart == -1) break
+
+            var escaped = false
+            var quoteEnd = -1
+            for (i in (quoteStart + 1) until html.length) {
+                val ch = html[i]
+                if (escaped) {
+                    escaped = false
+                    continue
+                }
+                if (ch == '\\') {
+                    escaped = true
+                    continue
+                }
+                if (ch == '"') {
+                    quoteEnd = i
+                    break
+                }
+            }
+            if (quoteEnd == -1) break
+            searchFrom = quoteEnd + 1
+
+            val encodedLiteral = html.substring(quoteStart, quoteEnd + 1)
+            if (!encodedLiteral.contains("urlList") && !encodedLiteral.contains("awemeId")) continue
+
+            val decoded = runCatching { JsonParser.parseString(encodedLiteral).asString }.getOrNull() ?: continue
+            extractBalancedJsonObject(decoded, "\"detail\":")?.let { return it }
+            extractBalancedJsonObject(decoded, "\"aweme\":")?.let { return it }
+        }
+        return null
+    }
+
     private fun findDouyinAwemeItemObject(node: JsonElement?): JsonObject? {
         if (node == null || node.isJsonNull) return null
         if (node.isJsonObject) {
             val obj = node.asJsonObject
-            if (obj.has("item_list")) {
-                val arr = obj.optArr("item_list")
-                if (arr != null && arr.size() > 0 && arr.get(0).isJsonObject) {
-                    return arr.get(0).asJsonObject
-                }
-            }
-            if (obj.has("aweme_detail") && obj.optObj("aweme_detail") != null) {
-                return obj.optObj("aweme_detail")
-            }
-            if (obj.has("aweme_id") && (obj.has("video") || obj.has("images") || obj.has("image_post_info") || obj.has("image_list"))) {
+            if ((obj.has("aweme_id") || obj.has("awemeId")) && (obj.has("video") || obj.has("images") || obj.has("image_post_info"))) {
                 return obj
             }
             for ((_, v) in obj.entrySet()) {
@@ -1563,24 +1791,23 @@ object MultiPlatformParserEngine {
                     ?.let { candidates.add(it) }
             }
         }
-
-        val chosen = candidates.firstOrNull() ?: return null
-        return chosen.replace("\\u002F", "/").replace("http://", "https://")
+        return candidates.firstOrNull()?.let { ParserSupport.normalizeMediaUrl(it) }
     }
 
-    private fun extractXiaohongshuVideoUrl(videoObj: JsonObject?): String? {
-        if (videoObj == null) return null
-        val stream = videoObj.optObj("media")?.optObj("stream")
+    private fun extractXiaohongshuVideoUrl(videoOrImgObj: JsonObject?): String? {
+        if (videoOrImgObj == null) return null
+        val stream = videoOrImgObj.optObj("media")?.optObj("stream")
+            ?: videoOrImgObj.optObj("stream")
         for (codec in listOf("h264", "h265", "av1")) {
             val arr = stream?.optArr(codec)
             if (arr != null && arr.size() > 0) {
                 val master = arr.get(0).takeIf { it.isJsonObject }?.asJsonObject?.optStr("masterUrl")
                 if (!master.isNullOrBlank()) {
-                    return master.replace("\\u002F", "/").replace("http://", "https://")
+                    return ParserSupport.normalizeMediaUrl(master)
                 }
             }
         }
-        val originKey = videoObj.optObj("consumer")?.optStr("originVideoKey")
+        val originKey = videoOrImgObj.optObj("consumer")?.optStr("originVideoKey")
         if (!originKey.isNullOrBlank()) {
             return "https://sns-video-bd.xhscdn.com/$originKey"
         }
@@ -1600,24 +1827,49 @@ object MultiPlatformParserEngine {
         return null
     }
 
-    private fun selectBestDouyinImageUrl(arr: JsonArray?): String? {
-        if (arr == null || arr.size() == 0) return null
+    internal fun isDouyinWatermarkedImageUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("watermark") ||
+            lower.contains("water-v") ||
+            lower.contains("water_v") ||
+            lower.contains("water-mark") ||
+            lower.contains("water_mark") ||
+            lower.contains("tplv-dy-water") ||
+            lower.contains("dy-water") ||
+            lower.contains("aweme-water") ||
+            (lower.contains("douyinpic.com") && url.contains("5oqW6Z"))
+    }
+
+    private fun collectCleanDouyinImageUrls(arr: JsonArray?): List<String> {
+        if (arr == null || arr.size() == 0) return emptyList()
         val list = mutableListOf<String>()
         for (i in 0 until arr.size()) {
             val el = arr.get(i)
-            val u = if (el.isJsonPrimitive) {
-                el.asString.replace("\\u002F", "/").replace("http://", "https://")
-            } else ""
-            if (u.startsWith("http")) {
+            val u = if (el.isJsonPrimitive) ParserSupport.normalizeMediaUrl(el.asString) else ""
+            if (u.startsWith("http") && !isDouyinWatermarkedImageUrl(u)) {
                 list.add(u)
             }
         }
-        return list.firstOrNull { !it.contains("watermark") && (it.contains(".jpeg") || it.contains(".jpg") || it.contains(".png")) }
-            ?: list.lastOrNull()
+        return list
+    }
+
+    private fun selectBestDouyinImageUrl(arr: JsonArray?): String? {
+        val clean = collectCleanDouyinImageUrls(arr)
+        if (clean.isEmpty()) return null
+        val isFullRes: (String) -> Boolean = { u ->
+            val l = u.lowercase()
+            !l.contains("shrink") && !l.contains("100x100") && !l.contains("200x200") && !l.contains("300x300")
+        }
+        return clean.firstOrNull { isFullRes(it) && !it.contains("tplv-", ignoreCase = true) }
+            ?: clean.firstOrNull { isFullRes(it) && (it.contains(".jpeg", true) || it.contains(".jpg", true) || it.contains(".png", true)) }
+            ?: clean.firstOrNull { it.contains(".jpeg", true) || it.contains(".jpg", true) || it.contains(".png", true) }
+            ?: clean.firstOrNull { isFullRes(it) && it.contains(".webp", true) }
+            ?: clean.firstOrNull { isFullRes(it) }
+            ?: clean.firstOrNull()
     }
 
     private fun extractFirstUrlFromHolder(holder: JsonObject?): String? {
-        return extractFirstUrlFromArray(holder?.optArr("url_list"))
+        return extractFirstUrlFromArray(holder?.optArr("url_list") ?: holder?.optArr("urlList"))
     }
 
     private fun extractFirstUrlFromArray(arr: JsonArray?): String? {
@@ -1625,57 +1877,21 @@ object MultiPlatformParserEngine {
         for (i in 0 until arr.size()) {
             val el = arr.get(i)
             val u = when {
-                el.isJsonPrimitive -> el.asString.replace("\\u002F", "/").replace("http://", "https://")
+                el.isJsonPrimitive -> ParserSupport.normalizeMediaUrl(el.asString)
                 el.isJsonObject -> {
                     val obj = el.asJsonObject
-                    (obj.optStr("url").takeIf { it.isNotBlank() }
-                        ?: obj.optStr("play_url").takeIf { it.isNotBlank() }
-                        ?: obj.optStr("src").takeIf { it.isNotBlank() }
-                        ?: "")
-                        .replace("\\u002F", "/")
-                        .replace("http://", "https://")
+                    ParserSupport.normalizeMediaUrl(
+                        obj.optStr("url").takeIf { it.isNotBlank() }
+                            ?: obj.optStr("play_url").takeIf { it.isNotBlank() }
+                            ?: obj.optStr("src").takeIf { it.isNotBlank() }
+                            ?: ""
+                    )
                 }
                 else -> ""
             }
-            if (u.startsWith("http")) {
-                return u
-            }
+            if (u.startsWith("http")) return u
         }
         return null
-    }
-
-    private fun extractMetaTags(html: String, propertyName: String): List<String> {
-        val results = mutableListOf<String>()
-        val p1 = Pattern.compile(
-            """<meta[^>]+(?:property|name)=["']${Pattern.quote(propertyName)}["'][^>]+content=["']([^"']+)["']""",
-            Pattern.CASE_INSENSITIVE
-        ).matcher(html)
-        while (p1.find()) {
-            p1.group(1)?.trim()?.takeIf { it.isNotBlank() }?.let { results.add(decodeHtmlEntities(it)) }
-        }
-
-        val p2 = Pattern.compile(
-            """<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${Pattern.quote(propertyName)}["']""",
-            Pattern.CASE_INSENSITIVE
-        ).matcher(html)
-        while (p2.find()) {
-            p2.group(1)?.trim()?.takeIf { it.isNotBlank() }?.let { results.add(decodeHtmlEntities(it)) }
-        }
-        return results.distinct()
-    }
-
-    private fun extractHtmlTitle(html: String): String {
-        val m = Pattern.compile("<title>(.*?)</title>", Pattern.DOTALL or Pattern.CASE_INSENSITIVE).matcher(html)
-        return if (m.find()) decodeHtmlEntities(m.group(1)?.trim() ?: "") else ""
-    }
-
-    private fun decodeHtmlEntities(input: String): String {
-        return input
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
     }
 
     private fun extractHashtags(text: String, textExtraArr: JsonArray?): List<String> {
@@ -1683,41 +1899,11 @@ object MultiPlatformParserEngine {
         textExtraArr?.let { arr ->
             for (i in 0 until arr.size()) {
                 val name = arr.get(i).takeIf { it.isJsonObject }?.asJsonObject?.optStr("hashtag_name")?.trim()
-                if (!name.isNullOrBlank()) {
-                    tags.add("#$name")
-                }
+                if (!name.isNullOrBlank()) tags.add("#$name")
             }
         }
-        val matcher = Pattern.compile("""#([^\s#，。！？、“”‘’【】（）]{1,24})""").matcher(text)
-        while (matcher.find()) {
-            matcher.group(1)?.let { tags.add("#$it") }
-        }
+        tags.addAll(ParserSupport.extractHashtagsFromText(text))
         return tags.toList()
-    }
-
-    private fun JsonObject.optStr(key: String, default: String = ""): String {
-        val el = get(key) ?: return default
-        return if (el.isJsonPrimitive) el.asString else default
-    }
-
-    private fun JsonObject.optInt(key: String, default: Int = 0): Int {
-        val el = get(key) ?: return default
-        return if (el.isJsonPrimitive) runCatching { el.asInt }.getOrDefault(default) else default
-    }
-
-    private fun JsonObject.optBool(key: String, default: Boolean = false): Boolean {
-        val el = get(key) ?: return default
-        return if (el.isJsonPrimitive) runCatching { el.asBoolean }.getOrDefault(default) else default
-    }
-
-    private fun JsonObject.optObj(key: String): JsonObject? {
-        val el = get(key) ?: return null
-        return if (el.isJsonObject) el.asJsonObject else null
-    }
-
-    private fun JsonObject.optArr(key: String): JsonArray? {
-        val el = get(key) ?: return null
-        return if (el.isJsonArray) el.asJsonArray else null
     }
 
     fun toHistoryEntity(post: ParsedPost, downloadedOnce: Boolean = false): ParseHistoryEntity {
@@ -1751,7 +1937,7 @@ object MultiPlatformParserEngine {
             gson.fromJson<List<String>>(entity.tagsJson, tagsType)
         }.getOrDefault(emptyList())
 
-        val mediaItems: List<MediaItem> = runCatching {
+        val rawMediaItems: List<MediaItem> = runCatching {
             gson.fromJson<List<MediaItem>>(entity.mediaItemsJson, mediaType)
         }.getOrDefault(emptyList())
 
@@ -1761,6 +1947,38 @@ object MultiPlatformParserEngine {
 
         val platform = runCatching { PlatformType.valueOf(entity.platform) }
             .getOrDefault(PlatformType.XIAOHONGSHU)
+
+        val mediaItems = if (platform == PlatformType.DOUYIN) {
+            rawMediaItems.map { item ->
+                if (item.isVideo) return@map item
+                val cleanFallbacks = item.fallbackUrls.filter {
+                    it.startsWith("http") && !isDouyinWatermarkedImageUrl(it)
+                }
+                val cleanOrigin = item.originUrl.takeIf { !isDouyinWatermarkedImageUrl(it) }
+                    ?: cleanFallbacks.firstOrNull { it.contains(".jpeg", true) || it.contains(".jpg", true) || it.contains(".png", true) }
+                    ?: cleanFallbacks.firstOrNull()
+                    ?: item.previewUrl.takeIf { it.startsWith("http") && !isDouyinWatermarkedImageUrl(it) }
+                if (cleanOrigin != null) {
+                    val cleanPreview = item.previewUrl.takeIf { it.startsWith("http") && !isDouyinWatermarkedImageUrl(it) }
+                        ?: cleanOrigin
+                    item.copy(
+                        originUrl = cleanOrigin,
+                        previewUrl = cleanPreview,
+                        fallbackUrls = if (cleanFallbacks.isNotEmpty()) cleanFallbacks else listOf(cleanOrigin)
+                    )
+                } else {
+                    item
+                }
+            }
+        } else {
+            rawMediaItems
+        }
+
+        val cleanCoverUrl = if (platform == PlatformType.DOUYIN && isDouyinWatermarkedImageUrl(entity.coverUrl)) {
+            mediaItems.firstOrNull()?.previewUrl?.ifBlank { entity.coverUrl } ?: entity.coverUrl
+        } else {
+            entity.coverUrl
+        }
 
         return ParsedPost(
             id = entity.postId,
@@ -1772,7 +1990,7 @@ object MultiPlatformParserEngine {
             authorName = entity.authorName,
             authorHandle = entity.authorHandle,
             authorAvatarUrl = entity.authorAvatarUrl,
-            coverUrl = entity.coverUrl,
+            coverUrl = cleanCoverUrl,
             title = entity.title,
             content = entity.content,
             tags = tags,
